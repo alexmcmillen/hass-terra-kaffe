@@ -77,7 +77,8 @@ class TerraKaffePowerButton(TerraKaffeEntity, ButtonEntity):
             if self.coordinator.data
             else {}
         )
-        if not device_state.get("available", False):
+        # Only block when Afero explicitly says the machine is offline.
+        if device_state.get("available") is False:
             raise HomeAssistantError(
                 "Device is not available. Please ensure the machine is powered on and connected."
             )
@@ -238,7 +239,7 @@ class TerraKaffeSavedDrinkButton(TerraKaffeEntity, ButtonEntity):
             )
 
         data = coordinator.data or {}
-        if not data.get("device_state", {}).get("available", False):
+        if data.get("device_state", {}).get("available") is False:
             raise HomeAssistantError("The machine is offline.")
         attributes = data.get("attributes", {})
         try:

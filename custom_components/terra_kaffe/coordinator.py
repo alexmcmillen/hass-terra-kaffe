@@ -61,16 +61,32 @@ class TerraKaffeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             state = await self.api.async_get_device_state(
                 self.account_id, self.device_id
             )
+            if not isinstance(state, dict):
+                raise UpdateFailed(f"Unexpected device response: {state!r:.200}")
             # Parse attributes array: [{"id": 1, "value": "3"}, ...] -> {1: "3", ...}
-            attributes_array = state.get("attributes", [])
+            attributes_array = state.get("attributes") or []
             attributes = {
                 attr["id"]: attr.get("value")
                 for attr in attributes_array
                 if "id" in attr
             }
+            device_state = state.get("deviceState")
+            if device_state is None:
+                device_state = state.get("state") or {}
+            LOGGER.debug(
+                "Poll OK: top-level keys=%s, deviceState=%s, %d attributes, "
+                "status=%s brewing=%s updated=%s",
+                sorted(state.keys()),
+                device_state,
+                len(attributes),
+                attributes.get(1),
+                attributes.get(13),
+                state.get("updatedTimestamp")
+                or (device_state or {}).get("updatedTimestamp"),
+            )
             return {
                 "attributes": attributes,
-                "device_state": state.get("deviceState", {}),
+                "device_state": device_state,
                 "extended_data": state.get("extendedData", {}),
                 "raw_state": state,
             }
