@@ -2,23 +2,22 @@
   "config": {
     "step": {
       "user": {
-        "title": "Terra Kaffe login",
-        "description": "Enter your Terra Kaffe account credentials. These are the same credentials you use in the Terra Kaffe mobile app.",
+        "title": "Terra Kaffe account",
+        "description": "Sign in with the account you use in the Terra Kaffe 2.0 app. Machines still on the original app are not supported.",
         "data": {
           "username": "Email",
           "password": "Password"
         }
       },
       "device": {
-        "title": "Select device",
-        "description": "Select the Terra Kaffe machine you want to add.",
+        "title": "Choose a machine",
         "data": {
-          "device_id": "Device"
+          "device_id": "Machine"
         }
       },
       "reauth_confirm": {
-        "title": "Re-authenticate",
-        "description": "Your Terra Kaffe session could not be renewed. Please re-enter your credentials.",
+        "title": "Sign in again",
+        "description": "Terra Kaffe needs you to sign in again.",
         "data": {
           "username": "Email",
           "password": "Password"
@@ -26,67 +25,41 @@
       }
     },
     "error": {
-      "cannot_connect": "Unable to connect to Terra Kaffe. Please check your internet connection.",
-      "invalid_auth": "Invalid email or password",
-      "invalid_device": "Invalid device selected",
-      "unknown": "Unexpected error occurred",
-      "wrong_account": "Those credentials belong to a different Terra Kaffe account than the one this machine was set up with."
+      "cannot_connect": "Could not reach Terra Kaffe. Try again in a moment.",
+      "invalid_auth": "Wrong email or password.",
+      "no_devices": "This account has no machines. Add your TK-02 in the Terra Kaffe 2.0 app first.",
+      "wrong_account": "That account does not own this machine.",
+      "unknown": "Unexpected error. Check the logs."
     },
     "abort": {
-      "already_configured": "This device is already configured",
-      "reauth_successful": "Re-authentication was successful"
+      "already_configured": "This machine is already set up.",
+      "reauth_successful": "Signed in again."
     }
   },
   "entity": {
-    "binary_sensor": {
-      "locked": {
-        "name": "Locked"
-      },
-      "screen_saver_enabled": {
-        "name": "Screen saver"
-      },
-      "preground_selected": {
-        "name": "Pre-ground coffee"
-      },
-      "wifi_enabled": {
-        "name": "WiFi"
-      },
-      "drip_tray_needs_cleaning": {
-        "name": "Drip tray needs cleaning"
-      }
-    },
-    "button": {
-      "power": {
-        "name": "Power"
-      },
-      "cancel_brew": {
-        "name": "Cancel brew"
-      }
-    },
     "sensor": {
       "device_status": {
-        "name": "Status"
+        "name": "Power status",
+        "state": {
+          "sleep": "Asleep",
+          "awake": "Awake",
+          "waking_up": "Waking up",
+          "going_to_sleep": "Going to sleep"
+        }
       },
       "brewing_status": {
-        "name": "Brewing status"
+        "name": "Brewing status",
+        "state": {
+          "ready": "Ready",
+          "brewing": "Brewing",
+          "prewarming": "Prewarming",
+          "paused": "Paused",
+          "cleaning": "Cleaning",
+          "error": "Error"
+        }
       },
       "brewing_progress": {
         "name": "Brewing progress"
-      },
-      "coffee_order": {
-        "name": "Coffee order"
-      },
-      "drink_history": {
-        "name": "Drink history"
-      },
-      "current_espresso_profile": {
-        "name": "Espresso profile"
-      },
-      "drink_order_error": {
-        "name": "Drink order error"
-      },
-      "drink_order_received": {
-        "name": "Drink order received"
       },
       "bean_level": {
         "name": "Bean level"
@@ -100,32 +73,29 @@
       "espresso_shots": {
         "name": "Espresso shots"
       },
-      "stats": {
-        "name": "Statistics"
+      "beans_used": {
+        "name": "Beans used"
+      },
+      "milk_used": {
+        "name": "Milk used"
+      },
+      "water_used": {
+        "name": "Water used"
       },
       "clean_brew_unit": {
-        "name": "Brew unit cleaning"
+        "name": "Brew unit cleaning remaining"
       },
-      "descale_status": {
-        "name": "Descale"
+      "descale": {
+        "name": "Descale remaining"
       },
       "water_filter": {
-        "name": "Water filter"
+        "name": "Water filter remaining"
       },
       "waste_bin_count": {
-        "name": "Waste bin"
-      },
-      "drip_tray": {
-        "name": "Drip tray"
-      },
-      "rinse_milk": {
-        "name": "Rinse milk"
+        "name": "Waste bin remaining"
       },
       "care_status": {
         "name": "Care status"
-      },
-      "maintenance_performed": {
-        "name": "Maintenance performed"
       },
       "grind_setting": {
         "name": "Grind setting"
@@ -133,55 +103,85 @@
       "water_hardness": {
         "name": "Water hardness"
       },
-      "language": {
-        "name": "Language"
-      },
-      "time_zone": {
-        "name": "Time zone"
-      },
-      "time_format": {
-        "name": "Time format"
-      },
       "screen_brightness": {
         "name": "Screen brightness"
       },
       "wake_drink": {
-        "name": "Wake-up drink"
+        "name": "Wake drink"
       },
-      "friendly_name": {
-        "name": "Friendly name"
-      },
-      "serial_number": {
-        "name": "Serial number"
-      },
-      "model": {
-        "name": "Model"
-      },
-      "os_version": {
-        "name": "OS version"
+      "current_espresso_profile": {
+        "name": "Current espresso profile"
       },
       "firmware_version": {
         "name": "Firmware version"
       },
-      "bootloader_version": {
-        "name": "Bootloader version"
+      "control_board_version": {
+        "name": "Control board version"
       },
-      "profile_version": {
-        "name": "Profile version"
+      "hmi_version": {
+        "name": "Display version"
       },
-      "wifi_ssid": {
-        "name": "WiFi network"
+      "os_version": {
+        "name": "OS version"
       },
-      "wifi_signal": {
-        "name": "WiFi signal"
+      "serial_number": {
+        "name": "Serial number"
+      }
+    },
+    "binary_sensor": {
+      "connected": {
+        "name": "Cloud connection"
       },
-      "device_id": {
-        "name": "Device ID"
+      "brewing": {
+        "name": "Brewing"
+      },
+      "brew_error": {
+        "name": "Brew error"
+      },
+      "locked": {
+        "name": "Screen lock"
+      },
+      "preground_selected": {
+        "name": "Pre-ground selected"
+      },
+      "schedule_enabled": {
+        "name": "Auto wake schedule"
+      }
+    },
+    "button": {
+      "wake": {
+        "name": "Wake"
+      },
+      "sleep": {
+        "name": "Sleep"
+      },
+      "cancel_brew": {
+        "name": "Cancel brew"
       }
     },
     "switch": {
       "allow_remote_brewing": {
-        "name": "Allow remote brewing"
+        "name": "Arm remote brewing"
+      }
+    }
+  },
+  "services": {
+    "brew_recipe": {
+      "name": "Brew recipe",
+      "description": "Starts a drink from a raw recipe string. Remote brewing must be armed and the machine awake and ready. Put a cup under the spout first.",
+      "fields": {
+        "recipe": {
+          "name": "Recipe",
+          "description": "Recipe string, for example $53|e1|f115. Copy one from a saved-drink button's attributes to be safe."
+        },
+        "name": {
+          "name": "Name",
+          "description": "Label for the drink."
+        },
+        "config_entry_id": {
+          "name": "Machine",
+          "description": "Only needed when more than one machine is set up."
+        }
       }
     }
   }

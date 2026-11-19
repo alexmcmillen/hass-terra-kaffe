@@ -1,284 +1,106 @@
-# Terra Kaffe Home Assistant Integration
+# Terra Kaffe for Home Assistant (TK Cloud 2.0)
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
+Home Assistant integration for the Terra Kaffe TK-02, rebuilt for the cloud
+platform behind the **Terra Kaffe 2.0** app.
 
-Home Assistant integration for Terra Kaffe coffee machines (TK-02 model). This integration allows you to monitor and control your Terra Kaffe coffee machine directly from Home Assistant.
+In 2026 Terra Kaffe moved the TK-02 off the Afero IoT platform onto its own
+cloud. Machines that have migrated no longer answer on the Afero API, which is
+what every earlier integration used (`bassrock/hass-terra-kaffe` and its
+forks). This fork replaces the API layer and keeps the good parts of
+`nickrunco/hass-terra-kaffe`: saved-drink buttons, cancel, and the
+remote-brewing safety arm.
 
-## Features
+> **Status: built from static analysis of app version 2.0.6 and the device
+> API's published schema. It passes its test suite against a simulated cloud
+> but has not yet been run against a real account.** See
+> [What is verified](#what-is-verified) before trusting it with your coffee.
 
-- **Device Control**: Wake and sleep your coffee machine
-- **Status Monitoring**: Track brewing status, device state, and maintenance needs
-- **Level Monitoring**: Monitor bean hopper level, waste bin level, and maintenance counters
-- **Statistics**: Track total cups brewed and espresso shots
-- **Maintenance Alerts**: Get notified when maintenance is needed (brew unit cleaning, descaling, water filter, waste bin, drip tray)
-- **Device Information**: Access device serial number, model, firmware version, and more
-- **WiFi Status**: Monitor WiFi connectivity and signal strength
+## What you get
 
-## Installation
+| Platform | Entities |
+|---|---|
+| Sensor | Power status, brewing status and progress, bean and waste bin level, total cups and shots, maintenance remaining (brew unit, descale, water filter, waste bin), firmware versions, settings |
+| Binary sensor | Cloud connection, brewing, brew error, screen lock, pre-ground, auto wake schedule |
+| Button | Wake, Sleep, Cancel brew, and one **Brew _drink name_** button per saved drink on the machine |
+| Switch | **Arm remote brewing** (safety, see below) |
+| Service | `terra_kaffe.brew_recipe` for a raw recipe string |
 
-### HACS (Recommended)
+### Remote brewing safety
 
-1. Ensure [HACS](https://hacs.xyz) is installed
-2. Go to HACS → Integrations
-3. Click the three dots (⋮) in the top right corner
-4. Select "Custom repositories"
-5. Add this repository URL: `https://github.com/nickrunco/hass-terra-kaffe`
-6. Select category "Integration"
-7. Click "Add"
-8. Search for "Terra Kaffe" in HACS
-9. Click "Download"
-10. Restart Home Assistant
+A drink only starts when all of these hold:
 
-### Manual Installation
+1. The **Arm remote brewing** switch is on. It turns itself off after one
+   drink, after 10 minutes, and on every restart.
+2. The machine is online, awake, and its brewing status is Ready.
 
-1. Download the latest release
-2. Copy the `custom_components/terra_kaffe` folder to your `custom_components` directory
-3. Restart Home Assistant
-
-## Configuration
-
-### Setup via UI
-
-1. Go to **Settings** → **Devices & Services**
-2. Click **Add Integration**
-3. Search for **Terra Kaffe**
-4. Enter your Terra Kaffe account credentials:
-   - **Username**: Your Terra Kaffe account email
-   - **Password**: Your Terra Kaffe account password
-5. If you have multiple devices, select the device you want to add
-6. Click **Submit**
-
-The integration will automatically discover your Terra Kaffe devices and set up all entities.
-
-### Reauthentication
-
-If your credentials expire, you'll be prompted to reauthenticate. Simply follow the reauthentication flow when prompted.
-
-## Entities
-
-### Sensors
-
-#### Core Status
-- **Device Status**: Current power state (Sleep, Awake, Waking up, Going to sleep)
-- **Brewing Status**: Current brewing state (Ready, Brewing, Prewarming, Paused, Cleaning, Error)
-- **Brewing Progress**: Brewing progress percentage (0-100%)
-
-#### Levels
-- **Bean Level**: Bean hopper fill level (percentage)
-- **Waste Bin Level**: Waste bin fill level (percentage)
-
-#### Counters
-- **Total Cups**: Total number of cups brewed
-- **Espresso Shots**: Total number of espresso shots
-
-#### Maintenance
-- **Clean Brew Unit**: Brew unit cleaning status (percentage remaining)
-- **Descale Status**: Descaling status (percentage remaining)
-- **Water Filter**: Water filter status (percentage remaining)
-- **Waste Bin Count**: Waste bin counter (percentage remaining)
-- **Rinse Milk**: Milk system rinse status
-- **Care Status**: Overall maintenance status flags
-
-#### Device Information
-- **Serial Number**: Device serial number
-- **Model**: Device model and firmware version
-- **OS Version**: Device OS version
-- **Firmware Version**: Application version
-- **Bootloader Version**: Bootloader version
-- **Profile Version**: Profile version
-- **Device ID**: Unique device identifier
-
-#### Settings
-- **Grind Setting**: Current grind setting
-- **Water Hardness**: Water hardness setting
-- **Language**: Device language setting
-- **Time Zone**: Device timezone
-- **Time Format**: 12-hour or 24-hour format
-- **Screen Brightness**: Screen brightness level
-- **Wake Drink**: Configured wake-up drink
-- **Friendly Name**: Custom device name
-
-#### WiFi
-- **WiFi SSID**: Connected WiFi network name
-- **WiFi Signal**: WiFi signal strength (dBm)
-
-#### Diagnostic (Disabled by default)
-- **Coffee Order**: Current coffee order
-- **Drink History**: Recent drink history
-- **Current Espresso Profile**: Active espresso profile ID
-- **Drink Order Error**: Last drink order error message
-- **Drink Order Received**: Last order confirmation
-- **Drip Tray**: Drip tray state
-- **Maintenance Performed**: Maintenance status
-
-### Binary Sensors
-
-- **Locked**: Whether the device is locked
-- **Screen Saver Enabled**: Whether the screen saver is active
-- **Preground Selected**: Whether pre-ground coffee mode is selected
-- **WiFi Enabled**: Whether WiFi is enabled
-- **Drip Tray Needs Cleaning**: Whether the drip tray needs cleaning
-
-### Buttons
-
-- **Power**: Toggle device wake/sleep state
-  - If the device is awake, pressing this will put it to sleep
-  - If the device is sleeping, pressing this will wake it up
-- **Cancel brew**: Stops the drink currently being made (only works while
-  brewing, pre-warming, or paused)
-
-### Remote brewing
-
-- **Allow remote brewing** (switch): a safety arm, off by default. The machine
-  can't tell whether a cup is under the spout, so a drink can only be started
-  while this is on. It turns itself off after one drink is started, after 10
-  minutes, or when Home Assistant restarts.
-- **Brew \<drink name\>** (buttons): one per drink saved on the machine
-  (slots 1–10). Empty slots are disabled. Each button shows the recipe it will
-  send as an attribute. A drink only starts when the safety arm is on, the
-  machine is awake, and it's idle.
-
-## Usage Examples
-
-### Automation: Wake Machine Before Morning Routine
+Cancel brew is never blocked. Put a cup under the spout before you arm it.
 
 ```yaml
-automation:
-  - alias: "Wake Terra Kaffe for Morning Coffee"
-    trigger:
-      - platform: time
-        at: "07:00:00"
-    action:
-      - service: button.press
-        target:
-          entity_id: button.terra_kaffe_power
+# Example: one tap for a morning latte, cup already in place.
+script:
+  morning_latte:
+    sequence:
+      - action: switch.turn_on
+        target: { entity_id: switch.kitchen_tk_arm_remote_brewing }
+      - action: button.press
+        target: { entity_id: button.kitchen_tk_brew_morning_latte }
 ```
 
-### Automation: Alert When Maintenance Needed
+## Install
 
-```yaml
-automation:
-  - alias: "Terra Kaffe Maintenance Alert"
-    trigger:
-      - platform: numeric_state
-        entity_id: sensor.terra_kaffe_clean_brew_unit
-        below: 20
-      - platform: numeric_state
-        entity_id: sensor.terra_kaffe_descale_status
-        below: 20
-      - platform: numeric_state
-        entity_id: sensor.terra_kaffe_water_filter
-        below: 20
-      - platform: state
-        entity_id: binary_sensor.terra_kaffe_drip_tray_needs_cleaning
-        to: "on"
-    action:
-      - service: notify.mobile_app_your_phone
-        data:
-          message: "Terra Kaffe maintenance needed: {{ trigger.entity_id }}"
+1. HACS, Integrations, three-dot menu, **Custom repositories**. Add this
+   repository as type **Integration**, then download it.
+   (Manual: copy `custom_components/terra_kaffe` into your config folder.)
+2. Restart Home Assistant.
+3. Settings, Devices and services, **Add integration**, Terra Kaffe. Sign in
+   with the same email and password as the Terra Kaffe 2.0 app.
+
+Coming from an Afero-based version: remove the old entry first. Afero device
+ids and tokens mean nothing to the new cloud, so entries cannot be converted.
+
+## How it works
+
+- **Sign-in:** Keycloak at `auth.terrakaffeservice.com`, realm `tkf`, public
+  client `tk_android`, password grant with `offline_access`. The refresh
+  token is stored in the config entry and rotated as Keycloak rotates it.
+  Your email and password are also stored there (`.storage/core.config_entries`)
+  so the integration can sign in again when the refresh token dies.
+- **State:** `GET /api/devices/{id}/twin` on `mercury.terrakaffeservice.com`,
+  polled every 30 seconds. The twin is an Azure IoT Hub device twin.
+- **Brew and cancel:** `POST /api/devices/{id}/command` with
+  `{"drink_order": "id^epoch^name^$53|e1|f115"}` or `{"cancel_brew": true}`.
+- **Wake and sleep:** `PUT /api/devices/{id}/twin` with a desired-properties
+  patch setting power status to 2 (wake) or 3 (sleep).
+
+Full notes are in [docs/API.md](docs/API.md).
+
+## What is verified
+
+| Piece | Confidence | Source |
+|---|---|---|
+| Sign-in form and token refresh | High | App source (`KeycloakSignInClient`, `RustAuthTokenProvider`) and the live OIDC discovery document |
+| Routes, verbs and request bodies | High | The device API's own OpenAPI schema |
+| Bearer token accepted by the device API | Medium | The app sends it; the schema only lists basic and cookie auth |
+| Twin key names | Medium | Schema example plus key names in the app's native library. Both the nested (`device.status`) and flat (`dev_sts`) shapes are handled |
+| Wake and sleep write | Medium | Values 2 and 3 are documented in the library; whether the cloud wants the nested or flat key is inferred from the shape the machine reports |
+| Saved-drink slot format | Medium | Library docstrings. The schema's example shows a different, older-looking format, which would simply leave the brew buttons unavailable |
+
+If something is off, **download diagnostics** from the integration page. The
+dump contains the twin exactly as the cloud returned it (serial, Wi-Fi, PIN
+and account details redacted) and is all that is needed to fix a mapping.
+
+## Development
+
+```bash
+python -m venv .venv && .venv/bin/pip install pytest-homeassistant-custom-component
+.venv/bin/pytest
 ```
 
-### Automation: Alert When Beans Are Low
+## Credits and license
 
-```yaml
-automation:
-  - alias: "Terra Kaffe Low Beans Alert"
-    trigger:
-      - platform: numeric_state
-        entity_id: sensor.terra_kaffe_bean_level
-        below: 20
-    action:
-      - service: notify.mobile_app_your_phone
-        data:
-          message: "Terra Kaffe bean level is low: {{ states('sensor.terra_kaffe_bean_level') }}%"
-```
+Fork of [nickrunco/hass-terra-kaffe](https://github.com/nickrunco/hass-terra-kaffe),
+itself a fork of [bassrock/hass-terra-kaffe](https://github.com/bassrock/hass-terra-kaffe).
+GPL-3.0, same as upstream.
 
-### Template: Display Brewing Status
-
-```yaml
-template:
-  - sensor:
-      - name: "Terra Kaffe Status"
-        state: >
-          {% if is_state('sensor.terra_kaffe_brewing_status', 'Brewing') %}
-            Brewing ({{ states('sensor.terra_kaffe_brewing_progress') }}%)
-          {% elif is_state('sensor.terra_kaffe_brewing_status', 'Error') %}
-            Error - Check machine
-          {% elif is_state('sensor.terra_kaffe_device_status', 'Sleep') %}
-            Sleeping
-          {% else %}
-            Ready
-          {% endif %}
-```
-
-## Requirements
-
-- Home Assistant 2025.1.0 or later
-- Terra Kaffe account credentials
-- Terra Kaffe TK-02 coffee machine connected to WiFi
-
-## Troubleshooting
-
-### Integration Won't Connect
-
-1. Verify your Terra Kaffe credentials are correct
-2. Ensure your coffee machine is powered on and connected to WiFi
-3. Check the Home Assistant logs for error messages
-4. Try removing and re-adding the integration
-
-### Entities Not Updating
-
-1. Check the device status sensor - if it shows "Sleep", the device may not be responding
-2. Wake the device using the power button
-3. Check your WiFi connection
-4. Review the Home Assistant logs for API errors
-
-### Authentication Errors
-
-If you see authentication errors:
-1. The integration will automatically prompt for reauthentication
-2. Enter your credentials again when prompted
-3. If issues persist, remove and re-add the integration
-
-### Device Not Found
-
-1. Ensure your Terra Kaffe account has access to the device
-2. Verify the device is registered in the Terra Kaffe mobile app
-3. Check that the device is online in the Terra Kaffe app
-
-## API Information
-
-This integration uses the Afero API (via `api2.gk7qmfrz.afero.net`) to communicate with Terra Kaffe devices. The integration authenticates using OAuth2 with your Terra Kaffe account credentials.
-
-For detailed API documentation, see [API_DOCUMENTATION.md](custom_components/terra_kaffe/API_DOCUMENTATION.md).
-
-## Support
-
-- **Issues**: Report issues on the [GitHub Issues](https://github.com/nickrunco/hass-terra-kaffe/issues) page
-- **Feature Requests**: Submit feature requests via GitHub Issues
-
-## Credits
-
-Forked from [bassrock/hass-terra-kaffe](https://github.com/bassrock/hass-terra-kaffe).
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## Security notes
-
-- Your Terra Kaffe email and password are stored in Home Assistant's config entry
-  (`.storage/core.config_entries`) so the integration can log in again when its
-  session expires. Anyone with access to your HA config or backups can read them,
-  so use a password you don't use anywhere else.
-- Authentication goes directly to Afero's OAuth server (the same one the official
-  app uses), impersonating the Android app's public client ID.
-
-## License
-
-This project is licensed under the MIT License.
-
-## Disclaimer
-
-This integration is not officially supported by Terra Kaffe. It is a community-developed integration that uses the same API as the official Terra Kaffe mobile app. Use at your own risk.
-
+Unofficial. Not affiliated with or endorsed by Terra Kaffe. It uses your own
+account to control your own machine, and brewing is a real physical action.

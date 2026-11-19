@@ -1,0 +1,17 @@
+brew_recipe:
+  fields:
+    recipe:
+      required: true
+      example: "$53|e1|f115"
+      selector:
+        text:
+    name:
+      required: false
+      example: "Latte"
+      selector:
+        text:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: terra_kaffe

@@ -1,23 +1,18 @@
-"""Config flow for Terra Kaffe integration."""
+"""Config flow for the Terra Kaffe integration."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import TerraKaffeAPI, TerraKaffeAPIError, TerraKaffeAuthError
-from .const import (
-    ATTR_BREWING_STATUS,
-    CONF_REFRESH_TOKEN,
-    DOMAIN,
-    LOGGER,
-    TK02_PROFILE_ID,
-)
+from .const import CONF_DEVICE_ID, CONF_REFRESH_TOKEN, DOMAIN, LOGGER
+from .twin import normalize_reported
 
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
@@ -27,234 +22,136 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
 )
 
 
-def is_coffee_machine(device: dict[str, Any]) -> bool:
-    """Return True if an Afero device looks like a Terra Kaffe machine.
-
-    Afero accounts also contain hubs (including phones running the app),
-    which must not be offered as machines.
-    """
-    if device.get("profileId") == TK02_PROFILE_ID:
-        return True
-    attributes = device.get("attributes") or []
-    return any(
-        isinstance(attr, dict) and attr.get("id") == ATTR_BREWING_STATUS
-        for attr in attributes
-    )
-
-
-def device_label(device: dict[str, Any]) -> str:
-    """Human-readable label for the device picker."""
-    device_id = str(device.get("deviceId", "unknown"))
-    name = device.get("friendlyName") or device.get("name") or "Terra Kaffe"
-    kind = "coffee machine" if is_coffee_machine(device) else "hub / other device"
-    return f"{name} ({kind}, {device_id[:8]})"
-
-
-async def validate_credentials(
-    hass: HomeAssistant, username: str, password: str
-) -> tuple[TerraKaffeAPI, dict[str, Any]]:
-    """Validate the credentials and return API client and account/device info."""
-    api = TerraKaffeAPI(hass)
-    try:
-        await api.async_login(username, password)
-        accounts = await api.async_get_accounts()
-        if not accounts:
-            raise CannotConnect("No accounts found")
-
-        # Get the first account
-        account = accounts[0]
-        account_id = account.get("accountId") or account.get("id")
-        if not account_id:
-            raise CannotConnect("Invalid account data")
-
-        # Get devices for the account
-        all_devices = await api.async_get_devices(account_id)
-        LOGGER.debug(
-            "Afero devices: %s",
-            [
-                (d.get("deviceId"), d.get("profileId"), d.get("friendlyName"))
-                for d in all_devices
-            ],
-        )
-        devices = [d for d in all_devices if is_coffee_machine(d)]
-        if not devices:
-            # Couldn't recognise any machine: show everything, clearly labelled.
-            devices = all_devices
-        if not devices:
-            raise CannotConnect("No devices found")
-
-        return api, {
-            "account_id": account_id,
-            "devices": devices,
-        }
-    except TerraKaffeAuthError as err:
-        raise InvalidAuth from err
-    except TerraKaffeAPIError as err:
-        raise CannotConnect from err
-
-
 class TerraKaffeConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Terra Kaffe."""
 
-    VERSION = 1
+    # Version 1 entries were for the retired Afero platform.
+    VERSION = 2
 
     def __init__(self) -> None:
         """Initialize the config flow."""
-        self._account_id: str | None = None
-        self._devices: list[dict[str, Any]] = []
         self._api: TerraKaffeAPI | None = None
-        self._username: str | None = None
-        self._password: str | None = None
+        self._username: str = ""
+        self._password: str = ""
+        self._devices: dict[str, str] = {}  # device_id -> label
+
+    async def _sign_in(self, username: str, password: str) -> str | None:
+        """Sign in and load the device list. Return an error key or None."""
+        api = TerraKaffeAPI(async_get_clientsession(self.hass))
+        try:
+            await api.async_login(username, password)
+            devices = await api.async_get_devices()
+            labels: dict[str, str] = {}
+            for device in devices:
+                device_id = str(device["device_id"])
+                labels[device_id] = await self._label(api, device_id)
+        except TerraKaffeAuthError:
+            return "invalid_auth"
+        except TerraKaffeAPIError as err:
+            LOGGER.debug("Sign-in failed: %s", err)
+            return "cannot_connect"
+        except Exception:  # noqa: BLE001
+            LOGGER.exception("Unexpected exception")
+            return "unknown"
+        self._api = api
+        self._username = username
+        self._password = password
+        self._devices = labels
+        return None
+
+    @staticmethod
+    async def _label(api: TerraKaffeAPI, device_id: str) -> str:
+        """Name a machine for the picker; fall back to its id."""
+        try:
+            twin = normalize_reported((await api.async_get_twin(device_id)).get("reported"))
+        except TerraKaffeAPIError:
+            twin = {}
+        name = twin.get("device.friendly_name") or twin.get("device.serial")
+        return f"{name} ({device_id[-6:]})" if name else f"Terra Kaffe {device_id}"
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle the initial step."""
+        """Ask for the Terra Kaffe account."""
         errors: dict[str, str] = {}
-
         if user_input is not None:
-            try:
-                self._username = user_input[CONF_USERNAME]
-                self._password = user_input[CONF_PASSWORD]
-                self._api, info = await validate_credentials(
-                    self.hass, self._username, self._password
-                )
-                self._account_id = info["account_id"]
-                self._devices = info["devices"]
-
-                # If only one device, configure it automatically
-                if len(self._devices) == 1:
-                    return await self._create_entry(self._devices[0])
-
+            error = await self._sign_in(
+                user_input[CONF_USERNAME].strip(), user_input[CONF_PASSWORD]
+            )
+            if error:
+                errors["base"] = error
+            elif not self._devices:
+                errors["base"] = "no_devices"
+            elif len(self._devices) == 1:
+                return await self._create_entry(next(iter(self._devices)))
+            else:
                 return await self.async_step_device()
-            except CannotConnect:
-                errors["base"] = "cannot_connect"
-            except InvalidAuth:
-                errors["base"] = "invalid_auth"
-            except Exception:  # noqa: BLE001
-                LOGGER.exception("Unexpected exception")
-                errors["base"] = "unknown"
-
         return self.async_show_form(
-            step_id="user",
-            data_schema=STEP_USER_DATA_SCHEMA,
-            errors=errors,
+            step_id="user", data_schema=STEP_USER_DATA_SCHEMA, errors=errors
         )
 
     async def async_step_device(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle device selection."""
-        errors: dict[str, str] = {}
-
+        """Pick a machine when the account has several."""
         if user_input is not None:
-            device_id = user_input["device_id"]
-            # Find the selected device
-            device = next(
-                (d for d in self._devices if d.get("deviceId") == device_id), None
-            )
-            if not device:
-                errors["base"] = "invalid_device"
-            else:
-                return await self._create_entry(device)
-
-        # Build device selection schema
-        device_options = {
-            device.get("deviceId"): device_label(device) for device in self._devices
-        }
-
+            return await self._create_entry(user_input[CONF_DEVICE_ID])
         return self.async_show_form(
             step_id="device",
             data_schema=vol.Schema(
-                {
-                    vol.Required("device_id"): vol.In(device_options),
-                }
+                {vol.Required(CONF_DEVICE_ID): vol.In(self._devices)}
             ),
-            errors=errors,
         )
 
-    async def _create_entry(self, device: dict[str, Any]) -> ConfigFlowResult:
-        """Create the config entry for a device."""
-        device_id = device.get("deviceId")
-        if not device_id:
-            raise CannotConnect("Invalid device data")
-
-        # Use device ID as unique ID
+    async def _create_entry(self, device_id: str) -> ConfigFlowResult:
         await self.async_set_unique_id(device_id)
         self._abort_if_unique_id_configured()
-
-        device_name = (
-            device.get("friendlyName")
-            or device.get("name")
-            or f"Terra Kaffe {device_id[:8]}"
-        )
-
+        assert self._api is not None
         return self.async_create_entry(
-            title=device_name,
+            title=self._devices.get(device_id, "Terra Kaffe"),
             data={
                 CONF_USERNAME: self._username,
                 CONF_PASSWORD: self._password,
-                CONF_REFRESH_TOKEN: self._api.refresh_token if self._api else None,
-                "account_id": self._account_id,
-                "device_id": device_id,
+                CONF_REFRESH_TOKEN: self._api.refresh_token,
+                CONF_DEVICE_ID: device_id,
             },
         )
 
     async def async_step_reauth(
-        self, entry_data: dict[str, Any]
+        self, entry_data: Mapping[str, Any]
     ) -> ConfigFlowResult:
-        """Handle reauthentication."""
+        """Start reauthentication."""
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle reauthentication confirmation."""
+        """Ask for the password again."""
+        entry = self._get_reauth_entry()
         errors: dict[str, str] = {}
-
-        reauth_entry = self._get_reauth_entry()
-
         if user_input is not None:
-            try:
-                api = TerraKaffeAPI(self.hass)
-                await api.async_login(
-                    user_input[CONF_USERNAME], user_input[CONF_PASSWORD]
-                )
-                accounts = await api.async_get_accounts()
-                account_id = accounts[0]["accountId"] if accounts else None
-            except TerraKaffeAuthError:
-                errors["base"] = "invalid_auth"
-            except TerraKaffeAPIError:
-                errors["base"] = "cannot_connect"
-            except Exception:  # noqa: BLE001
-                LOGGER.exception("Unexpected exception")
-                errors["base"] = "unknown"
+            error = await self._sign_in(
+                user_input[CONF_USERNAME].strip(), user_input[CONF_PASSWORD]
+            )
+            if error:
+                errors["base"] = error
+            elif entry.data[CONF_DEVICE_ID] not in self._devices:
+                errors["base"] = "wrong_account"
             else:
-                if account_id != reauth_entry.data.get("account_id"):
-                    errors["base"] = "wrong_account"
-                else:
-                    return self.async_update_reload_and_abort(
-                        reauth_entry,
-                        data_updates={
-                            CONF_USERNAME: user_input[CONF_USERNAME],
-                            CONF_PASSWORD: user_input[CONF_PASSWORD],
-                            CONF_REFRESH_TOKEN: api.refresh_token,
-                        },
-                    )
-
+                assert self._api is not None
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data_updates={
+                        CONF_USERNAME: self._username,
+                        CONF_PASSWORD: self._password,
+                        CONF_REFRESH_TOKEN: self._api.refresh_token,
+                    },
+                )
         return self.async_show_form(
             step_id="reauth_confirm",
             data_schema=self.add_suggested_values_to_schema(
                 STEP_USER_DATA_SCHEMA,
-                {CONF_USERNAME: reauth_entry.data.get(CONF_USERNAME)},
+                {CONF_USERNAME: entry.data.get(CONF_USERNAME, "")},
             ),
             errors=errors,
         )
-
-
-class CannotConnect(HomeAssistantError):
-    """Error to indicate we cannot connect."""
-
-
-class InvalidAuth(HomeAssistantError):
-    """Error to indicate there is invalid auth."""

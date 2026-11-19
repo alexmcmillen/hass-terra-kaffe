@@ -1,15 +1,13 @@
 {
   "domain": "terra_kaffe",
   "name": "Terra Kaffe",
-  "codeowners": [
-    "@nickrunco"
-  ],
+  "codeowners": [],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/nickrunco/hass-terra-kaffe",
+  "documentation": "https://github.com/alexmcmillen/hass-terra-kaffe",
   "integration_type": "device",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/nickrunco/hass-terra-kaffe/issues",
+  "issue_tracker": "https://github.com/alexmcmillen/hass-terra-kaffe/issues",
   "requirements": [],
-  "version": "0.1.2"
+  "version": "0.2.0"
 }

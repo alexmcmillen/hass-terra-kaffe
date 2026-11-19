@@ -2,36 +2,66 @@
 
 from __future__ import annotations
 
+import time
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed
-from homeassistant.helpers import device_registry as dr
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import TerraKaffeAPI, TerraKaffeAPIError, TerraKaffeAuthError
 from .const import (
-    ATTR_DEVICE_FRIENDLY_NAME,
-    ATTR_DEVICE_MODEL,
-    ATTR_DEVICE_OS,
-    ATTR_DEVICE_SERIAL,
+    CONF_DEVICE_ID,
+    DEFAULT_MODEL,
     DOMAIN,
     LOGGER,
     MANUFACTURER,
-    UPDATE_INTERVAL_CLOUD,
+    UPDATE_INTERVAL,
+)
+from .twin import (
+    BREW_READY,
+    POWER_AWAKE,
+    POWER_GOING_TO_SLEEP,
+    POWER_GOING_TO_WAKE,
+    Recipe,
+    build_desired_patch,
+    normalize_reported,
+    to_int,
+    uses_flat_keys,
 )
 
 type TerraKaffeConfigEntry = ConfigEntry[TerraKaffeDataUpdateCoordinator]
 
 
-class TerraKaffeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Class to manage fetching Terra Kaffe data."""
+@dataclass
+class TerraKaffeData:
+    """One snapshot of the machine."""
+
+    twin: dict[str, Any] = field(default_factory=dict)
+    flat_keys: bool = False
+    connection_state: str | None = None
+    last_activity_time: str | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def power(self) -> int | None:
+        """Power status (0 sleep, 1 awake, 2 waking, 3 going to sleep)."""
+        return to_int(self.twin.get("device.status"))
+
+    @property
+    def brew_status(self) -> int | None:
+        """Brewing status (0 ready ... 5 error)."""
+        return to_int(self.twin.get("brew.status"))
+
+
+class TerraKaffeDataUpdateCoordinator(DataUpdateCoordinator[TerraKaffeData]):
+    """Polls the machine's device twin."""
 
     config_entry: TerraKaffeConfigEntry
-    api: TerraKaffeAPI
 
     def __init__(
         self,
@@ -45,97 +75,130 @@ class TerraKaffeDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             LOGGER,
             config_entry=config_entry,
             name=DOMAIN,
-            update_interval=timedelta(seconds=UPDATE_INTERVAL_CLOUD),
+            update_interval=timedelta(seconds=UPDATE_INTERVAL),
         )
         self.api = api
-        self.account_id = config_entry.data["account_id"]
-        self.device_id = config_entry.data["device_id"]
+        self.device_id: str = config_entry.data[CONF_DEVICE_ID]
         # Remote-brew safety: monotonic deadline until which brewing is
         # allowed. None = not armed. Never persisted, so a restart disarms.
         self.brew_armed_until: float | None = None
         self.brew_arm_switch: Any = None  # set by the switch platform
 
-    async def _async_update_data(self) -> dict[str, Any]:
-        """Fetch data from the API."""
+    async def _async_update_data(self) -> TerraKaffeData:
         try:
-            state = await self.api.async_get_device_state(
-                self.account_id, self.device_id
-            )
-            if not isinstance(state, dict):
-                raise UpdateFailed(f"Unexpected device response: {state!r:.200}")
-            # Parse attributes array: [{"id": 1, "value": "3"}, ...] -> {1: "3", ...}
-            attributes_array = state.get("attributes") or []
-            attributes = {
-                attr["id"]: attr.get("value")
-                for attr in attributes_array
-                if "id" in attr
-            }
-            device_state = state.get("deviceState")
-            if device_state is None:
-                device_state = state.get("state") or {}
-            LOGGER.debug(
-                "Poll OK: top-level keys=%s, deviceState=%s, %d attributes, "
-                "status=%s brewing=%s updated=%s",
-                sorted(state.keys()),
-                device_state,
-                len(attributes),
-                attributes.get(1),
-                attributes.get(13),
-                state.get("updatedTimestamp")
-                or (device_state or {}).get("updatedTimestamp"),
-            )
-            return {
-                "attributes": attributes,
-                "device_state": device_state,
-                "extended_data": state.get("extendedData", {}),
-                "raw_state": state,
-            }
+            raw = await self.api.async_get_twin(self.device_id)
         except TerraKaffeAuthError as err:
             raise ConfigEntryAuthFailed("Authentication failed") from err
         except TerraKaffeAPIError as err:
-            raise UpdateFailed(f"Error communicating with API: {err}") from err
+            raise UpdateFailed(f"Error communicating with Terra Kaffe: {err}") from err
+
+        reported = raw.get("reported")
+        twin = normalize_reported(reported)
+        data = TerraKaffeData(
+            twin=twin,
+            flat_keys=uses_flat_keys(reported),
+            connection_state=raw.get("connection_state"),
+            last_activity_time=raw.get("last_activity_time"),
+            raw=raw,
+        )
+        LOGGER.debug(
+            "Poll OK: %d properties (%s keys), connection=%s power=%s brew=%s",
+            len(twin),
+            "flat" if data.flat_keys else "nested",
+            data.connection_state,
+            data.power,
+            data.brew_status,
+        )
+        return data
+
+    # ---------------------------------------------------------------- actions
+
+    async def _write(self, path: str, value: Any) -> None:
+        flat = self.data.flat_keys if self.data else False
+        patch = build_desired_patch(path, value, flat=flat)
+        try:
+            await self.api.async_update_desired(self.device_id, patch)
+        except TerraKaffeAuthError as err:
+            self.config_entry.async_start_reauth(self.hass)
+            raise HomeAssistantError("Terra Kaffe sign-in expired") from err
+        except TerraKaffeAPIError as err:
+            raise HomeAssistantError(f"Terra Kaffe rejected the change: {err}") from err
+
+    async def async_wake(self) -> None:
+        """Wake the machine."""
+        await self._write("device.status", POWER_GOING_TO_WAKE)
+        await self.async_request_refresh()
+
+    async def async_sleep(self) -> None:
+        """Put the machine to sleep."""
+        await self._write("device.status", POWER_GOING_TO_SLEEP)
+        await self.async_request_refresh()
+
+    async def async_cancel_brew(self) -> None:
+        """Cancel the drink being made."""
+        try:
+            await self.api.async_cancel_brew(self.device_id)
+        except TerraKaffeAPIError as err:
+            raise HomeAssistantError(f"Could not cancel: {err}") from err
+        await self.async_request_refresh()
+
+    def check_brew_allowed(self) -> None:
+        """Raise unless it is safe and permitted to start a drink right now."""
+        armed_until = self.brew_armed_until
+        if armed_until is None or time.monotonic() >= armed_until:
+            raise HomeAssistantError(
+                "Remote brewing is not armed. Turn on the 'Arm remote brewing' "
+                "switch first, and make sure a cup is under the spout."
+            )
+        data = self.data
+        if data is None:
+            raise HomeAssistantError("Machine state is not known yet.")
+        if data.connection_state not in (None, "Connected"):
+            raise HomeAssistantError("The machine is offline.")
+        if data.power != POWER_AWAKE:
+            raise HomeAssistantError(
+                "The machine is not awake. Wake it and wait until it is ready."
+            )
+        if data.brew_status != BREW_READY:
+            raise HomeAssistantError("The machine is busy and cannot start a drink.")
+
+    async def async_brew(self, recipe: Recipe) -> None:
+        """Start a drink, subject to the safety checks."""
+        self.check_brew_allowed()
+        try:
+            order = recipe.order_string()
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        # One drink per arm: disarm before sending so a retry can't double-brew.
+        if self.brew_arm_switch is not None:
+            self.brew_arm_switch.disarm()
+        else:
+            self.brew_armed_until = None
+        try:
+            await self.api.async_send_drink_order(self.device_id, order)
+        except TerraKaffeAPIError as err:
+            raise HomeAssistantError(f"Could not start the drink: {err}") from err
+        await self.async_request_refresh()
+
+    # ------------------------------------------------------------ device info
 
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information."""
-        data = self.data or {}
-        attributes = data.get("attributes", {})
-        extended_data = data.get("extended_data", {})
-
-        # Get device info from attributes
-        serial = attributes.get(ATTR_DEVICE_SERIAL) or self.device_id
-        model = attributes.get(ATTR_DEVICE_MODEL) or "TK-02"
-        sw_version = attributes.get(ATTR_DEVICE_OS)
-        friendly_name = attributes.get(ATTR_DEVICE_FRIENDLY_NAME)
-
-        # Use friendly name if set, otherwise use serial
-        name = friendly_name if friendly_name else f"Terra Kaffe {serial}"
-
-        # Get MAC addresses from extendedData if available
-        wifi_mac = extended_data.get("wifiMac")
-        ble_mac = extended_data.get("bleMac")
-
-        # Format MAC addresses using Home Assistant's format_mac function
-        connections = set()
-        if wifi_mac:
-            # Format: "c4d8d54d2bfc" -> "c4:d8:d5:4d:2b:fc"
-            formatted_mac = ":".join(
-                wifi_mac[i : i + 2] for i in range(0, len(wifi_mac), 2)
-            )
-            connections.add((dr.CONNECTION_NETWORK_MAC, dr.format_mac(formatted_mac)))
-        if ble_mac:
-            # Format: "c4d8d54d2bfe" -> "c4:d8:d5:4d:2b:fe"
-            formatted_mac = ":".join(
-                ble_mac[i : i + 2] for i in range(0, len(ble_mac), 2)
-            )
-            connections.add((dr.CONNECTION_BLUETOOTH, dr.format_mac(formatted_mac)))
-
+        twin = self.data.twin if self.data else {}
+        serial = twin.get("device.serial")
+        name = twin.get("device.friendly_name") or (
+            f"Terra Kaffe {serial}" if serial else "Terra Kaffe"
+        )
         return DeviceInfo(
             identifiers={(DOMAIN, self.device_id)},
-            name=name,
+            name=str(name),
             manufacturer=MANUFACTURER,
-            model=model,
-            sw_version=sw_version,
-            serial_number=serial if serial != self.device_id else None,
-            connections=connections if connections else None,
+            model=str(twin.get("device.model") or DEFAULT_MODEL),
+            sw_version=_str_or_none(twin.get("device.fw.app") or twin.get("device.os")),
+            serial_number=_str_or_none(serial),
         )
+
+
+def _str_or_none(value: Any) -> str | None:
+    return None if value in (None, "") else str(value)

@@ -1,105 +1,78 @@
-"""Binary sensor platform for Terra Kaffe."""
+"""Binary sensors for Terra Kaffe."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
 
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
     BinarySensorEntityDescription,
 )
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import EntityCategory
-from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import (
-    ATTR_CARE_STATUS,
-    ATTR_LOCKED,
-    ATTR_PREGROUND_SELECTED,
-    ATTR_SCREEN_SAVER_ENABLED,
-    ATTR_WIFI_ENABLED,
+from .coordinator import (
+    TerraKaffeConfigEntry,
+    TerraKaffeData,
+    TerraKaffeDataUpdateCoordinator,
 )
-from .coordinator import TerraKaffeConfigEntry, TerraKaffeDataUpdateCoordinator
 from .entity import TerraKaffeEntity
-
-
-def parse_bool(value: Any) -> bool | None:
-    """Parse boolean value from various formats."""
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.lower() in ("true", "1", "on", "yes")
-    if isinstance(value, int):
-        return value != 0
-    return None
-
-
-def parse_care_status_drip_tray(value: Any) -> bool | None:
-    """Parse drip tray status from CARE_STATUS bitmask.
-
-    Drip tray needs cleaning when bit 11 (0x800 = 2048) is set.
-    Confirmed from network capture: care_status = 2048 when drip tray is full.
-    """
-    if value is None:
-        return None
-    try:
-        status_int = int(value)
-        # Bit 11 (0x800 = 2048) indicates drip tray needs cleaning
-        return bool(status_int & 0x800)
-    except (ValueError, TypeError):
-        return None
+from .twin import BREW_BREWING, BREW_ERROR, to_bool
 
 
 @dataclass(frozen=True, kw_only=True)
-class TerraKaffeBinarySensorEntityDescription(BinarySensorEntityDescription):
-    """Describe Terra Kaffe binary sensor."""
+class TerraKaffeBinarySensorDescription(BinarySensorEntityDescription):
+    """Describes a Terra Kaffe binary sensor."""
 
-    attr_id: int
-    value_fn: Callable[[Any], bool | None] = parse_bool
+    is_on_fn: Callable[[TerraKaffeData], bool | None]
 
 
-BINARY_SENSOR_DESCRIPTIONS: tuple[TerraKaffeBinarySensorEntityDescription, ...] = (
-    TerraKaffeBinarySensorEntityDescription(
+def _connected(data: TerraKaffeData) -> bool | None:
+    if data.connection_state is None:
+        return None
+    return data.connection_state == "Connected"
+
+
+BINARY_SENSORS: tuple[TerraKaffeBinarySensorDescription, ...] = (
+    TerraKaffeBinarySensorDescription(
+        key="connected",
+        translation_key="connected",
+        device_class=BinarySensorDeviceClass.CONNECTIVITY,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        is_on_fn=_connected,
+    ),
+    TerraKaffeBinarySensorDescription(
+        key="brewing",
+        translation_key="brewing",
+        device_class=BinarySensorDeviceClass.RUNNING,
+        is_on_fn=lambda d: None if d.brew_status is None else d.brew_status == BREW_BREWING,
+    ),
+    TerraKaffeBinarySensorDescription(
+        key="brew_error",
+        translation_key="brew_error",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        is_on_fn=lambda d: None if d.brew_status is None else d.brew_status == BREW_ERROR,
+    ),
+    TerraKaffeBinarySensorDescription(
         key="locked",
         translation_key="locked",
-        attr_id=ATTR_LOCKED,
-        device_class=BinarySensorDeviceClass.LOCK,
-        icon="mdi:lock",
-    ),
-    TerraKaffeBinarySensorEntityDescription(
-        key="screen_saver_enabled",
-        translation_key="screen_saver_enabled",
-        attr_id=ATTR_SCREEN_SAVER_ENABLED,
-        icon="mdi:monitor-eye",
         entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=False,
+        is_on_fn=lambda d: to_bool(d.twin.get("device.locked")),
     ),
-    TerraKaffeBinarySensorEntityDescription(
+    TerraKaffeBinarySensorDescription(
         key="preground_selected",
         translation_key="preground_selected",
-        attr_id=ATTR_PREGROUND_SELECTED,
-        icon="mdi:coffee-maker",
-    ),
-    TerraKaffeBinarySensorEntityDescription(
-        key="wifi_enabled",
-        translation_key="wifi_enabled",
-        attr_id=ATTR_WIFI_ENABLED,
-        device_class=BinarySensorDeviceClass.CONNECTIVITY,
-        icon="mdi:wifi",
         entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=False,
+        is_on_fn=lambda d: to_bool(d.twin.get("brew.preground")),
     ),
-    TerraKaffeBinarySensorEntityDescription(
-        key="drip_tray_needs_cleaning",
-        translation_key="drip_tray_needs_cleaning",
-        attr_id=ATTR_CARE_STATUS,
-        icon="mdi:tray-alert",
-        value_fn=parse_care_status_drip_tray,
+    TerraKaffeBinarySensorDescription(
+        key="schedule_enabled",
+        translation_key="schedule_enabled",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        is_on_fn=lambda d: to_bool(d.twin.get("schedules.enabled")),
     ),
 )
 
@@ -107,25 +80,25 @@ BINARY_SENSOR_DESCRIPTIONS: tuple[TerraKaffeBinarySensorEntityDescription, ...] 
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: TerraKaffeConfigEntry,
-    async_add_entities: AddConfigEntryEntitiesCallback,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Terra Kaffe binary sensor entities."""
+    """Set up Terra Kaffe binary sensors."""
     coordinator = entry.runtime_data
     async_add_entities(
         TerraKaffeBinarySensor(coordinator, description)
-        for description in BINARY_SENSOR_DESCRIPTIONS
+        for description in BINARY_SENSORS
     )
 
 
 class TerraKaffeBinarySensor(TerraKaffeEntity, BinarySensorEntity):
-    """Representation of a Terra Kaffe binary sensor."""
+    """An on/off value derived from the device twin."""
 
-    entity_description: TerraKaffeBinarySensorEntityDescription
+    entity_description: TerraKaffeBinarySensorDescription
 
     def __init__(
         self,
         coordinator: TerraKaffeDataUpdateCoordinator,
-        description: TerraKaffeBinarySensorEntityDescription,
+        description: TerraKaffeBinarySensorDescription,
     ) -> None:
         """Initialize the binary sensor."""
         super().__init__(coordinator, description.key)
@@ -133,9 +106,5 @@ class TerraKaffeBinarySensor(TerraKaffeEntity, BinarySensorEntity):
 
     @property
     def is_on(self) -> bool | None:
-        """Return true if the binary sensor is on."""
-        if not self.coordinator.data:
-            return None
-        attributes = self.coordinator.data.get("attributes", {})
-        value = attributes.get(self.entity_description.attr_id)
-        return self.entity_description.value_fn(value)
+        """Return the state."""
+        return self.entity_description.is_on_fn(self.coordinator.data)

@@ -1,1 +1,4 @@
-custom_components/terra_kaffe/__pycache__
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc

@@ -1,24 +1,32 @@
-"""API client for the Terra Kaffe (Afero) cloud."""
+"""Client for the Terra Kaffe cloud (TK Cloud 2.0).
+
+Auth is Keycloak (realm ``tkf``, public client ``tk_android``): a password
+grant returns a short-lived access token and an offline refresh token.
+Device state is an Azure IoT Hub device twin served by the "mercury" API.
+
+This module only depends on aiohttp, so it can be tested without Home
+Assistant.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import logging
 import time
 from collections.abc import Callable
 from typing import Any
 
-import aiohttp
-from aiohttp import ClientSession, ClientTimeout
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from aiohttp import ClientError, ClientSession, ClientTimeout
 
-from .const import AFERO_CLIENT_ID, AFERO_SERVICE_URL, AFERO_TOKEN_URL
+from .const import (
+    AUTH_SCOPE,
+    CLIENT_ID,
+    LOGGER,
+    MOBILE_API_URL,
+    REQUEST_TIMEOUT,
+    TOKEN_URL,
+)
 
-_LOGGER = logging.getLogger(__name__)
-
-# Refresh the access token this many seconds before it actually expires.
-# Afero access tokens are short-lived (~120 s), so keep the margin modest.
+# Refresh this many seconds before the access token actually expires.
 TOKEN_EXPIRY_MARGIN = 30
 
 
@@ -27,281 +35,231 @@ class TerraKaffeAPIError(Exception):
 
 
 class TerraKaffeAuthError(TerraKaffeAPIError):
-    """Authentication error (bad credentials or expired session)."""
+    """Credentials or tokens were rejected."""
+
+
+class TerraKaffeNotFoundError(TerraKaffeAPIError):
+    """The device does not exist or is not on this account."""
 
 
 class TerraKaffeAPI:
-    """Afero API client for Terra Kaffe."""
+    """Async client for Terra Kaffe's auth and device APIs."""
 
     def __init__(
         self,
-        hass: HomeAssistant,
-        session: ClientSession | None = None,
+        session: ClientSession,
+        *,
+        token_url: str = TOKEN_URL,
+        api_url: str = MOBILE_API_URL,
     ) -> None:
-        """Initialize the API client."""
-        self.hass = hass
-        self._session = session or async_get_clientsession(hass)
-        self._base_url = AFERO_SERVICE_URL
+        """Initialize the client."""
+        self._session = session
+        self._token_url = token_url
+        self._api_url = api_url.rstrip("/")
+        self._timeout = ClientTimeout(total=REQUEST_TIMEOUT, connect=10)
         self._access_token: str | None = None
         self._refresh_token: str | None = None
-        self._token_expiry: float | None = None  # time.monotonic() deadline
-        self._account_id: str | None = None
+        self._expires_at: float = 0.0
         self._username: str | None = None
         self._password: str | None = None
         self._auth_lock = asyncio.Lock()
-        self._timeout = ClientTimeout(total=30, connect=10)
-        # Called with the new refresh token whenever it changes, so the
-        # integration can persist it in the config entry.
+        # Called with the new refresh token whenever Keycloak rotates it.
         self.on_refresh_token_update: Callable[[str], None] | None = None
 
-    # ------------------------------------------------------------------
-    # Token / credential handling
-    # ------------------------------------------------------------------
-
-    def set_credentials(self, username: str, password: str) -> None:
-        """Store credentials so the client can log in again on its own."""
-        self._username = username
-        self._password = password
-
-    def set_tokens(
-        self,
-        access_token: str | None,
-        refresh_token: str | None = None,
-        expires_in: int | None = None,
-    ) -> None:
-        """Set the authentication tokens."""
-        self._access_token = access_token or None
-        if refresh_token and refresh_token != self._refresh_token:
-            self._refresh_token = refresh_token
-            if self.on_refresh_token_update:
-                self.on_refresh_token_update(refresh_token)
-        if expires_in:
-            margin = min(TOKEN_EXPIRY_MARGIN, expires_in // 2)
-            self._token_expiry = time.monotonic() + expires_in - margin
-        else:
-            self._token_expiry = None
+    # ------------------------------------------------------------------ auth
 
     @property
     def refresh_token(self) -> str | None:
-        """Return the refresh token."""
+        """Return the current refresh token."""
         return self._refresh_token
 
-    @property
-    def _token_is_valid(self) -> bool:
-        if not self._access_token:
-            return False
-        return self._token_expiry is None or time.monotonic() < self._token_expiry
+    def set_credentials(self, username: str, password: str) -> None:
+        """Store credentials used when the refresh token stops working."""
+        self._username = username
+        self._password = password
 
-    async def _token_request(self, data: dict[str, str]) -> dict[str, Any]:
-        """POST to the OAuth token endpoint and return the JSON body."""
+    def set_refresh_token(self, refresh_token: str | None) -> None:
+        """Seed a stored refresh token (does not fire the update callback)."""
+        self._refresh_token = refresh_token
+
+    async def async_login(self, username: str, password: str) -> None:
+        """Sign in with email and password."""
+        self.set_credentials(username, password)
+        async with self._auth_lock:
+            await self._password_grant()
+
+    async def _token_request(self, form: dict[str, str]) -> dict[str, Any]:
         try:
             async with self._session.post(
-                AFERO_TOKEN_URL,
-                data={"client_id": AFERO_CLIENT_ID, **data},
-                timeout=self._timeout,
+                self._token_url, data=form, timeout=self._timeout
             ) as response:
-                if response.status in (400, 401):
-                    try:
-                        body = await response.json(content_type=None)
-                    except (ValueError, aiohttp.ContentTypeError):
-                        body = {}
-                    message = (body or {}).get("error_description") or (
-                        body or {}
-                    ).get("error", "Authentication failed")
-                    raise TerraKaffeAuthError(message)
-                if response.status >= 400:
-                    text = await response.text()
-                    raise TerraKaffeAPIError(
-                        f"Auth server returned {response.status}: {text[:200]}"
-                    )
-                token_data = await response.json(content_type=None)
-        except (aiohttp.ClientError, TimeoutError) as err:
-            raise TerraKaffeAPIError(f"Cannot reach Afero auth server: {err}") from err
+                status = response.status
+                try:
+                    body = await response.json(content_type=None)
+                except ValueError:
+                    body = None
+        except (ClientError, TimeoutError) as err:
+            raise TerraKaffeAPIError(
+                f"Could not reach Terra Kaffe sign-in: {err}"
+            ) from err
 
-        if not token_data.get("access_token"):
-            raise TerraKaffeAPIError("No access token in auth response")
-        self.set_tokens(
-            access_token=token_data["access_token"],
-            refresh_token=token_data.get("refresh_token"),
-            expires_in=token_data.get("expires_in"),
+        if status == 200 and isinstance(body, dict) and body.get("access_token"):
+            return body
+        detail = ""
+        if isinstance(body, dict):
+            detail = str(body.get("error_description") or body.get("error") or "")
+        if status in (400, 401, 403):
+            # Keycloak answers 400/401 invalid_grant for bad credentials and
+            # for expired or revoked refresh tokens.
+            raise TerraKaffeAuthError(detail or f"Sign-in rejected ({status})")
+        raise TerraKaffeAPIError(f"Sign-in failed ({status}) {detail}".strip())
+
+    def _store_tokens(self, body: dict[str, Any]) -> None:
+        self._access_token = body["access_token"]
+        expires_in = body.get("expires_in")
+        try:
+            lifetime = float(expires_in)
+        except (TypeError, ValueError):
+            lifetime = 60.0
+        self._expires_at = time.monotonic() + max(5.0, lifetime - TOKEN_EXPIRY_MARGIN)
+        new_refresh = body.get("refresh_token")
+        if new_refresh and new_refresh != self._refresh_token:
+            self._refresh_token = new_refresh
+            if self.on_refresh_token_update is not None:
+                self.on_refresh_token_update(new_refresh)
+
+    async def _password_grant(self) -> None:
+        if not self._username or not self._password:
+            raise TerraKaffeAuthError("No credentials available")
+        body = await self._token_request(
+            {
+                "grant_type": "password",
+                "client_id": CLIENT_ID,
+                "username": self._username,
+                "password": self._password,
+                "scope": AUTH_SCOPE,
+            }
         )
-        return token_data
+        self._store_tokens(body)
 
-    async def async_login(self, username: str, password: str) -> dict[str, Any]:
-        """Log in with email/password (OAuth resource-owner password grant)."""
-        self.set_credentials(username, password)
-        token_data = await self._token_request(
-            {"grant_type": "password", "username": username, "password": password}
-        )
-        _LOGGER.debug("Login successful")
-        await self._fetch_account_id()
-        return token_data
-
-    async def async_refresh_access_token(self) -> dict[str, Any]:
-        """Get a new access token using the refresh token."""
+    async def _refresh_grant(self) -> None:
         if not self._refresh_token:
             raise TerraKaffeAuthError("No refresh token available")
-        return await self._token_request(
-            {"grant_type": "refresh_token", "refresh_token": self._refresh_token}
+        body = await self._token_request(
+            {
+                "grant_type": "refresh_token",
+                "client_id": CLIENT_ID,
+                "refresh_token": self._refresh_token,
+            }
         )
+        self._store_tokens(body)
 
-    async def _reauthenticate(self) -> None:
-        """Get a fresh access token: refresh first, then fall back to password."""
+    async def _renew(self) -> None:
+        """Get a fresh access token: refresh token first, then password."""
         if self._refresh_token:
             try:
-                await self.async_refresh_access_token()
-            except TerraKaffeAuthError:
-                _LOGGER.debug("Refresh token rejected, falling back to password")
+                await self._refresh_grant()
+            except TerraKaffeAuthError as err:
+                LOGGER.debug("Refresh token rejected, using password: %s", err)
             else:
                 return
-        if self._username and self._password:
-            await self._token_request(
-                {
-                    "grant_type": "password",
-                    "username": self._username,
-                    "password": self._password,
-                }
-            )
-            return
-        raise TerraKaffeAuthError("Session expired and no credentials available")
+        await self._password_grant()
 
-    async def _ensure_token_valid(self, force: bool = False) -> None:
-        """Make sure we hold a usable access token."""
+    async def _ensure_token(self, *, force: bool = False) -> str:
         async with self._auth_lock:
-            if force or not self._token_is_valid:
-                await self._reauthenticate()
+            expired = time.monotonic() >= self._expires_at
+            if force or not self._access_token or expired:
+                await self._renew()
+            assert self._access_token is not None
+            return self._access_token
 
-    # ------------------------------------------------------------------
-    # Generic request helper
-    # ------------------------------------------------------------------
+    # -------------------------------------------------------------- requests
 
-    async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
-        """Make an authenticated request, retrying once after a 401."""
-        await self._ensure_token_valid()
+    async def _request(
+        self, method: str, path: str, *, json_body: Any = None
+    ) -> Any:
+        url = f"{self._api_url}/{path.lstrip('/')}"
         for attempt in (1, 2):
+            token = await self._ensure_token(force=attempt == 2)
             try:
                 async with self._session.request(
                     method,
-                    f"{self._base_url}{path}",
+                    url,
+                    json=json_body,
                     headers={
-                        "Authorization": f"Bearer {self._access_token}",
+                        "Authorization": f"Bearer {token}",
                         "Accept": "application/json",
                     },
                     timeout=self._timeout,
-                    **kwargs,
                 ) as response:
-                    if response.status == 401 and attempt == 1:
-                        _LOGGER.debug("Access token rejected, re-authenticating")
-                        await self._ensure_token_valid(force=True)
-                        continue
-                    if response.status in (401, 403):
-                        raise TerraKaffeAuthError(
-                            f"Not authorized ({response.status}) for {path}"
-                        )
-                    if response.status >= 400:
-                        text = await response.text()
-                        message = text[:500]
-                        try:
-                            body = await response.json(content_type=None)
-                            if isinstance(body, dict):
-                                message = body.get("message") or body.get(
-                                    "error", message
-                                )
-                        except (ValueError, aiohttp.ContentTypeError):
-                            pass
-                        raise TerraKaffeAPIError(
-                            f"{method} {path} failed ({response.status}): {message}"
-                        )
-                    if response.status == 204:
-                        return None
-                    text = await response.text()
-                    if not text:
-                        return None
+                    status = response.status
                     try:
-                        return await response.json(content_type=None)
+                        body = await response.json(content_type=None)
                     except ValueError:
-                        return text
-            except (aiohttp.ClientError, TimeoutError) as err:
+                        body = None
+            except (ClientError, TimeoutError) as err:
                 raise TerraKaffeAPIError(
-                    f"Cannot reach Terra Kaffe cloud ({method} {path}): {err}"
+                    f"Could not reach Terra Kaffe: {err}"
                 ) from err
-        raise TerraKaffeAuthError("Not authorized after re-authentication")
 
-    # ------------------------------------------------------------------
-    # Endpoints
-    # ------------------------------------------------------------------
+            if status == 401 and attempt == 1:
+                continue  # token expired early or was revoked: renew once
+            if 200 <= status < 300:
+                return body
+            detail = ""
+            if isinstance(body, dict):
+                detail = str(
+                    body.get("error") or body.get("message") or body.get("detail") or ""
+                )
+            if status in (401, 403):
+                raise TerraKaffeAuthError(detail or f"Not authorised ({status})")
+            if status == 404:
+                raise TerraKaffeNotFoundError(detail or "Device not found")
+            raise TerraKaffeAPIError(
+                f"{method} {path} failed ({status}) {detail}".strip()
+            )
+        raise TerraKaffeAPIError("Request failed")  # pragma: no cover
 
-    async def _fetch_account_id(self) -> None:
-        """Fetch the account ID from /v1/users/me."""
-        user_data = await self._request("GET", "/v1/users/me")
-        account_access = (user_data or {}).get("accountAccess", [])
-        if account_access:
-            self._account_id = account_access[0]["account"]["accountId"]
+    # ---------------------------------------------------------------- device
 
-    async def async_get_accounts(self) -> list[dict[str, Any]]:
-        """Return the user's account (Afero exposes one per user)."""
-        if not self._account_id:
-            await self._fetch_account_id()
-        if self._account_id:
-            return [{"accountId": self._account_id, "id": self._account_id}]
-        raise TerraKaffeAPIError(
-            "Failed to retrieve account information. Please try re-authenticating."
+    async def async_get_devices(self) -> list[dict[str, Any]]:
+        """Return the machines on this account."""
+        body = await self._request("GET", "devices/")
+        if isinstance(body, dict):
+            body = body.get("devices")
+        if not isinstance(body, list):
+            return []
+        return [d for d in body if isinstance(d, dict) and d.get("device_id")]
+
+    async def async_get_twin(self, device_id: str) -> dict[str, Any]:
+        """Return the device twin (state) for a machine."""
+        body = await self._request("GET", f"devices/{device_id}/twin")
+        if not isinstance(body, dict):
+            raise TerraKaffeAPIError("Unexpected twin response")
+        return body
+
+    async def async_update_desired(
+        self, device_id: str, desired: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Patch desired properties on the twin (merge semantics)."""
+        body = await self._request(
+            "PUT", f"devices/{device_id}/twin", json_body={"desired": desired}
         )
+        return body if isinstance(body, dict) else None
 
-    async def async_get_devices(self, account_id: str) -> list[dict[str, Any]]:
-        """Get devices for an account."""
-        data = await self._request(
-            "GET",
-            f"/v1/accounts/{account_id}/devices",
-            params={"expansions": "state,attributes,timezone,tags"},
+    async def _command(self, device_id: str, payload: dict[str, Any]) -> None:
+        body = await self._request(
+            "POST", f"devices/{device_id}/command", json_body=payload
         )
-        if isinstance(data, list):
-            return data
-        return (data or {}).get("items", (data or {}).get("devices", []))
+        if isinstance(body, dict) and body.get("success") is False:
+            raise TerraKaffeAPIError(
+                str(body.get("message") or "The machine rejected the command")
+            )
 
-    async def async_get_device_state(
-        self, account_id: str, device_id: str
-    ) -> dict[str, Any]:
-        """Get device state and attributes."""
-        return await self._request(
-            "GET",
-            f"/v1/accounts/{account_id}/devices/{device_id}",
-            params={"expansions": "state,attributes,extendedData"},
-        )
+    async def async_send_drink_order(self, device_id: str, order: str) -> None:
+        """Start a drink. ``order`` is ``id^epoch^name^recipe[^profileId]``."""
+        await self._command(device_id, {"drink_order": order})
 
-    async def async_set_attribute(
-        self,
-        account_id: str,
-        device_id: str,
-        attribute_id: int,
-        value: Any,
-    ) -> None:
-        """Write a device attribute.
-
-        Afero expects attribute values as strings, even numeric ones, wrapped
-        in an ``attribute_write`` request.
-        """
-        _LOGGER.debug("Setting attribute %s on device %s", attribute_id, device_id)
-        result = await self._request(
-            "POST",
-            f"/v1/accounts/{account_id}/devices/{device_id}/requests",
-            json=[
-                {"type": "attribute_write", "attrId": attribute_id, "value": str(value)}
-            ],
-        )
-        # Afero answers 202 with a per-request status list; surface failures.
-        if isinstance(result, list):
-            for item in result:
-                status = str(item.get("status", "SUCCESS")).upper()
-                if status not in ("SUCCESS", "ACCEPTED", "QUEUED", "PENDING"):
-                    raise TerraKaffeAPIError(
-                        f"Machine rejected write to attribute {attribute_id}: {item}"
-                    )
-
-    async def async_test_connection(self) -> bool:
-        """Test the API connection."""
-        try:
-            await self.async_get_accounts()
-        except TerraKaffeAPIError:
-            return False
-        return True
+    async def async_cancel_brew(self, device_id: str) -> None:
+        """Cancel the drink being made."""
+        await self._command(device_id, {"cancel_brew": True})
