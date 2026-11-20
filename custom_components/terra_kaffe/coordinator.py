@@ -23,7 +23,7 @@ from .const import (
     UPDATE_INTERVAL,
 )
 from .twin import (
-    BREW_READY,
+    BREW_IDLE_STATES,
     POWER_AWAKE,
     POWER_GOING_TO_SLEEP,
     POWER_GOING_TO_WAKE,
@@ -159,7 +159,7 @@ class TerraKaffeDataUpdateCoordinator(DataUpdateCoordinator[TerraKaffeData]):
             raise HomeAssistantError(
                 "The machine is not awake. Wake it and wait until it is ready."
             )
-        if data.brew_status != BREW_READY:
+        if data.brew_status not in BREW_IDLE_STATES:
             raise HomeAssistantError("The machine is busy and cannot start a drink.")
 
     async def async_brew(self, recipe: Recipe) -> None:

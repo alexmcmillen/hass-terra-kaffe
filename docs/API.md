@@ -54,7 +54,7 @@ mapping.
 | Nested path | Flat key | Meaning |
 |---|---|---|
 | `device.status` | `dev_sts` | 0 sleep, 1 awake, 2 going to wake, 3 going to sleep. Write 2 or 3; the firmware ignores 0 and 1 |
-| `brew.status` | `brew_sts` | 0 ready, 1 brewing, 2 prewarmup, 3 paused, 4 cleaning, 5 error |
+| `brew.status` | `brew_sts` | 0 ready, 1 brewing, 2 prewarmup, 3 done (the app calls it paused; TK-02 firmware 39 reports it after every finished drink), 4 cleaning, 5 error |
 | `brew.progress` | `brew_prog` | percent |
 | `levels.bean` | `bean_lvl` | bean hopper |
 | `levels.waste_bin` | `waste_bin_lvl` | waste bin |

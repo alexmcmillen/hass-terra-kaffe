@@ -1,0 +1,5 @@
+# Test dependencies. The integration itself has no runtime requirements:
+# it only uses aiohttp and voluptuous, which Home Assistant already ships.
+# This pin tracks the newest Home Assistant release the test harness supports.
+pytest-homeassistant-custom-component==0.13.375
+pytest-cov==7.0.0

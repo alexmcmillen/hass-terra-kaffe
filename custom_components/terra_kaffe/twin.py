@@ -12,6 +12,7 @@ This module has no Home Assistant imports so it can be tested on its own.
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -35,6 +36,7 @@ FLAT_ALIASES: dict[str, str] = {
     "grind_sz": "levels.grind",
     "cup_cnt": "stats.cups",
     "shot_cnt": "stats.shots",
+    "bean_cnt": "stats.beans",
     "milk_cnt": "stats.milk",
     "water_cnt": "stats.water",
     "care_sts": "care.status",
@@ -85,9 +87,14 @@ POWER_GOING_TO_SLEEP = 3
 BREW_READY = 0
 BREW_BREWING = 1
 BREW_PREWARMUP = 2
-BREW_PAUSED = 3
+# The app labels 3 "paused", but on TK-02 firmware 39 the machine reports 3
+# after a drink completes and keeps it until the next drink (observed live
+# 2026-11-20: 0 -> 1 while brewing -> 3 when done). It is an idle state.
+BREW_DONE = 3
 BREW_CLEANING = 4
 BREW_ERROR = 5
+# Statuses in which a new drink may be started.
+BREW_IDLE_STATES = frozenset({BREW_READY, BREW_DONE})
 
 # The command endpoint rejects drink orders longer than this.
 DRINK_ORDER_MAX_LEN = 90
@@ -257,15 +264,34 @@ def parse_recipe_slot(value: Any) -> Recipe | None:
     )
 
 
+# ``$<type>`` then ``|<letter><value>`` parts, e.g. ``$53|e1|f115`` or
+# ``$0|w100:t3``. Nothing that could break out of the ``^``-separated order.
+_RECIPE_RE = re.compile(r"^\$\d{1,4}(\|[A-Za-z][A-Za-z0-9:]{0,15}){0,16}$")
+RECIPE_MAX_LEN = 64
+
+
 def is_recipe_string(value: Any) -> bool:
     """True for strings shaped like ``$53|e1|f115``."""
     if not isinstance(value, str):
         return False
     value = value.strip()
-    if not value.startswith("$"):
-        return False
-    head = value[1:].split("|", 1)[0]
-    return head.isdigit() and "^" not in value
+    return len(value) <= RECIPE_MAX_LEN and bool(_RECIPE_RE.fullmatch(value))
+
+
+def clean_drink_name(value: Any, default: str = "Home Assistant") -> str:
+    """Make a free-text name safe for the ``^``-separated drink order."""
+    text = "".join(
+        ch if ch.isprintable() and ch not in "^|$" else " " for ch in str(value or "")
+    )
+    text = " ".join(text.split())[:32]
+    return text or default
+
+
+def parse_grind(value: Any) -> int | None:
+    """Grind setting; firmware 39 reports ``"2|0"`` (setting|sub-step)."""
+    if isinstance(value, str) and "|" in value:
+        value = value.split("|", 1)[0]
+    return to_int(value)
 
 
 def decode_recipe(recipe: str) -> dict[str, str]:

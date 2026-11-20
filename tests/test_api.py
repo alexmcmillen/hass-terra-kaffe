@@ -33,11 +33,16 @@ class FakeCloud:
         if grant == "password":
             if form.get("password") != "hunter2":
                 return web.json_response(
-                    {"error": "invalid_grant", "error_description": "Invalid user credentials"},
+                    {
+                        "error": "invalid_grant",
+                        "error_description": "Invalid user credentials",
+                    },
                     status=401,
                 )
         elif grant == "refresh_token":
-            if not self.refresh_ok or not form.get("refresh_token", "").startswith("refresh-"):
+            if not self.refresh_ok or not form.get("refresh_token", "").startswith(
+                "refresh-"
+            ):
                 return web.json_response({"error": "invalid_grant"}, status=400)
         else:
             return web.json_response({"error": "unsupported_grant_type"}, status=400)
@@ -45,11 +50,18 @@ class FakeCloud:
         access = f"access-{self.counter}"
         self.valid_tokens = {access}
         return web.json_response(
-            {"access_token": access, "refresh_token": f"refresh-{self.counter}", "expires_in": self.expires_in}
+            {
+                "access_token": access,
+                "refresh_token": f"refresh-{self.counter}",
+                "expires_in": self.expires_in,
+            }
         )
 
     def _authed(self, request):
-        return request.headers.get("Authorization", "").removeprefix("Bearer ") in self.valid_tokens
+        return (
+            request.headers.get("Authorization", "").removeprefix("Bearer ")
+            in self.valid_tokens
+        )
 
     async def api(self, request):
         body = await request.json() if request.can_read_body else None
@@ -58,11 +70,20 @@ class FakeCloud:
             return web.json_response({"error": "Unauthorized"}, status=401)
         path = request.path
         if path == "/api/devices/":
-            return web.json_response({"devices": [{"device_id": "dev123456", "access_level": "owner"}]})
+            return web.json_response(
+                {"devices": [{"device_id": "dev123456", "access_level": "owner"}]}
+            )
         if path == "/api/devices/dev123456/twin":
             return web.json_response(make_twin(NESTED_REPORTED))
         if path == "/api/devices/dev123456/command":
-            return web.json_response({"success": True, "message": "ok", "device_id": "dev123456", "timestamp": "2026-11-19T14:00:00Z"})
+            return web.json_response(
+                {
+                    "success": True,
+                    "message": "ok",
+                    "device_id": "dev123456",
+                    "timestamp": "2026-11-19T14:00:00Z",
+                }
+            )
         if path == "/api/devices/broken/twin":
             return web.Response(status=503, text="upstream down")
         return web.json_response({"error": "Device not found"}, status=404)
@@ -106,7 +127,9 @@ async def test_bad_password_is_auth_error(cloud):
 async def test_devices_twin_and_commands(cloud):
     fake, api = cloud
     await api.async_login("me@example.com", "hunter2")
-    assert await api.async_get_devices() == [{"device_id": "dev123456", "access_level": "owner"}]
+    assert await api.async_get_devices() == [
+        {"device_id": "dev123456", "access_level": "owner"}
+    ]
     twin = await api.async_get_twin("dev123456")
     assert twin["reported"]["device"]["status"] == 1
     await api.async_update_desired("dev123456", {"device": {"status": 2}})
@@ -114,7 +137,11 @@ async def test_devices_twin_and_commands(cloud):
     await api.async_cancel_brew("dev123456")
     assert fake.requests[-3:] == [
         ("PUT", "/api/devices/dev123456/twin", {"desired": {"device": {"status": 2}}}),
-        ("POST", "/api/devices/dev123456/command", {"drink_order": "a1^5^Latte^$53|e1|f115"}),
+        (
+            "POST",
+            "/api/devices/dev123456/command",
+            {"drink_order": "a1^5^Latte^$53|e1|f115"},
+        ),
         ("POST", "/api/devices/dev123456/command", {"cancel_brew": True}),
     ]
 
@@ -168,7 +195,11 @@ async def test_error_mapping(cloud):
 
 async def test_unreachable_host(socket_enabled):
     async with ClientSession() as session:
-        api = TerraKaffeAPI(session, token_url="http://127.0.0.1:9/token", api_url="http://127.0.0.1:9/api")
+        api = TerraKaffeAPI(
+            session,
+            token_url="http://127.0.0.1:9/token",
+            api_url="http://127.0.0.1:9/api",
+        )
         with pytest.raises(TerraKaffeAPIError) as err:
             await api.async_login("me@example.com", "hunter2")
         assert not isinstance(err.value, TerraKaffeAuthError)

@@ -26,4 +26,3 @@ class TerraKaffeEntity(CoordinatorEntity[TerraKaffeDataUpdateCoordinator]):
     def device_info(self) -> DeviceInfo:
         """Return device information."""
         return self.coordinator.device_info
-

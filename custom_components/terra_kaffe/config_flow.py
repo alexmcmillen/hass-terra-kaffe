@@ -27,12 +27,13 @@ class TerraKaffeConfigFlow(ConfigFlow, domain=DOMAIN):
 
     # Version 1 entries were for the retired Afero platform.
     VERSION = 2
+    # 2.2: the password is no longer stored.
+    MINOR_VERSION = 2
 
     def __init__(self) -> None:
         """Initialize the config flow."""
         self._api: TerraKaffeAPI | None = None
         self._username: str = ""
-        self._password: str = ""
         self._devices: dict[str, str] = {}  # device_id -> label
 
     async def _sign_in(self, username: str, password: str) -> str | None:
@@ -45,6 +46,9 @@ class TerraKaffeConfigFlow(ConfigFlow, domain=DOMAIN):
             for device in devices:
                 device_id = str(device["device_id"])
                 labels[device_id] = await self._label(api, device_id)
+            if not api.refresh_token:
+                # Without offline_access there is nothing to keep signed in with.
+                return "cannot_connect"
         except TerraKaffeAuthError:
             return "invalid_auth"
         except TerraKaffeAPIError as err:
@@ -55,7 +59,6 @@ class TerraKaffeConfigFlow(ConfigFlow, domain=DOMAIN):
             return "unknown"
         self._api = api
         self._username = username
-        self._password = password
         self._devices = labels
         return None
 
@@ -63,7 +66,9 @@ class TerraKaffeConfigFlow(ConfigFlow, domain=DOMAIN):
     async def _label(api: TerraKaffeAPI, device_id: str) -> str:
         """Name a machine for the picker; fall back to its id."""
         try:
-            twin = normalize_reported((await api.async_get_twin(device_id)).get("reported"))
+            twin = normalize_reported(
+                (await api.async_get_twin(device_id)).get("reported")
+            )
         except TerraKaffeAPIError:
             twin = {}
         name = twin.get("device.friendly_name") or twin.get("device.serial")
@@ -111,7 +116,6 @@ class TerraKaffeConfigFlow(ConfigFlow, domain=DOMAIN):
             title=self._devices.get(device_id, "Terra Kaffe"),
             data={
                 CONF_USERNAME: self._username,
-                CONF_PASSWORD: self._password,
                 CONF_REFRESH_TOKEN: self._api.refresh_token,
                 CONF_DEVICE_ID: device_id,
             },
@@ -143,7 +147,6 @@ class TerraKaffeConfigFlow(ConfigFlow, domain=DOMAIN):
                     entry,
                     data_updates={
                         CONF_USERNAME: self._username,
-                        CONF_PASSWORD: self._password,
                         CONF_REFRESH_TOKEN: self._api.refresh_token,
                     },
                 )

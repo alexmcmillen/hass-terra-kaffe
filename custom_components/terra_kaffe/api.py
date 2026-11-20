@@ -11,6 +11,7 @@ Assistant.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections.abc import Callable
 from typing import Any
@@ -28,6 +29,17 @@ from .const import (
 
 # Refresh this many seconds before the access token actually expires.
 TOKEN_EXPIRY_MARGIN = 30
+
+# Device ids are opaque hex strings from the device list. Anything else is
+# refused before it can be spliced into a URL path.
+_DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def validate_device_id(device_id: str) -> str:
+    """Return ``device_id`` if it is safe to put in a URL path."""
+    if not isinstance(device_id, str) or not _DEVICE_ID_RE.fullmatch(device_id):
+        raise TerraKaffeAPIError("Invalid device id")
+    return device_id
 
 
 class TerraKaffeAPIError(Exception):
@@ -91,7 +103,10 @@ class TerraKaffeAPI:
     async def _token_request(self, form: dict[str, str]) -> dict[str, Any]:
         try:
             async with self._session.post(
-                self._token_url, data=form, timeout=self._timeout
+                self._token_url,
+                data=form,
+                timeout=self._timeout,
+                allow_redirects=False,
             ) as response:
                 status = response.status
                 try:
@@ -175,9 +190,7 @@ class TerraKaffeAPI:
 
     # -------------------------------------------------------------- requests
 
-    async def _request(
-        self, method: str, path: str, *, json_body: Any = None
-    ) -> Any:
+    async def _request(self, method: str, path: str, *, json_body: Any = None) -> Any:
         url = f"{self._api_url}/{path.lstrip('/')}"
         for attempt in (1, 2):
             token = await self._ensure_token(force=attempt == 2)
@@ -191,6 +204,8 @@ class TerraKaffeAPI:
                         "Accept": "application/json",
                     },
                     timeout=self._timeout,
+                    # Never forward the bearer token to another host.
+                    allow_redirects=False,
                 ) as response:
                     status = response.status
                     try:
@@ -198,9 +213,7 @@ class TerraKaffeAPI:
                     except ValueError:
                         body = None
             except (ClientError, TimeoutError) as err:
-                raise TerraKaffeAPIError(
-                    f"Could not reach Terra Kaffe: {err}"
-                ) from err
+                raise TerraKaffeAPIError(f"Could not reach Terra Kaffe: {err}") from err
 
             if status == 401 and attempt == 1:
                 continue  # token expired early or was revoked: renew once
@@ -229,10 +242,17 @@ class TerraKaffeAPI:
             body = body.get("devices")
         if not isinstance(body, list):
             return []
-        return [d for d in body if isinstance(d, dict) and d.get("device_id")]
+        return [
+            d
+            for d in body
+            if isinstance(d, dict)
+            and isinstance(d.get("device_id"), str)
+            and _DEVICE_ID_RE.fullmatch(d["device_id"])
+        ]
 
     async def async_get_twin(self, device_id: str) -> dict[str, Any]:
         """Return the device twin (state) for a machine."""
+        validate_device_id(device_id)
         body = await self._request("GET", f"devices/{device_id}/twin")
         if not isinstance(body, dict):
             raise TerraKaffeAPIError("Unexpected twin response")
@@ -242,12 +262,14 @@ class TerraKaffeAPI:
         self, device_id: str, desired: dict[str, Any]
     ) -> dict[str, Any] | None:
         """Patch desired properties on the twin (merge semantics)."""
+        validate_device_id(device_id)
         body = await self._request(
             "PUT", f"devices/{device_id}/twin", json_body={"desired": desired}
         )
         return body if isinstance(body, dict) else None
 
     async def _command(self, device_id: str, payload: dict[str, Any]) -> None:
+        validate_device_id(device_id)
         body = await self._request(
             "POST", f"devices/{device_id}/command", json_body=payload
         )

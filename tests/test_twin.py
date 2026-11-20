@@ -57,7 +57,15 @@ def test_desired_patch_mirrors_reported_shape():
 
 @pytest.mark.parametrize(
     ("value", "expected"),
-    [("45/200", 78), ("0/200", 100), ("200/200", 0), ("250/200", 0), ("x", None), (5, None), ("1/0", None)],
+    [
+        ("45/200", 78),
+        ("0/200", 100),
+        ("200/200", 0),
+        ("250/200", 0),
+        ("x", None),
+        (5, None),
+        ("1/0", None),
+    ],
 )
 def test_counter_remaining(value, expected):
     assert counter_remaining_percent(value) == expected
@@ -71,7 +79,9 @@ def test_conversions():
 def test_parse_slot_and_order_string():
     drink = parse_recipe_slot("b2^1710000001^Flat white^$54|e2|f90^ep7")
     assert drink == Recipe("b2", "Flat white", "$54|e2|f90", "ep7")
-    assert drink.order_string(now=1800000000) == "b2^1800000000^Flat white^$54|e2|f90^ep7"
+    assert (
+        drink.order_string(now=1800000000) == "b2^1800000000^Flat white^$54|e2|f90^ep7"
+    )
     assert parse_recipe_slot("a1^1^Latte^$53|e1|f115").order_string(now=5) == (
         "a1^5^Latte^$53|e1|f115"
     )

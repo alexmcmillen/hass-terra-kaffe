@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.const import CONF_PASSWORD, CONF_USERNAME, Platform
+from homeassistant.const import CONF_PASSWORD, Platform
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
@@ -21,7 +21,7 @@ from .const import (
     SERVICE_BREW_RECIPE,
 )
 from .coordinator import TerraKaffeConfigEntry, TerraKaffeDataUpdateCoordinator
-from .twin import Recipe, is_recipe_string
+from .twin import Recipe, clean_drink_name, is_recipe_string
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
@@ -50,7 +50,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             raise ServiceValidationError(
                 "Recipe must look like $53|e1|f115 (a $type id, then |key+value parts)."
             )
-        name = call.data[ATTR_NAME].replace("^", " ").strip() or "Home Assistant"
+        name = clean_drink_name(call.data[ATTR_NAME])
         coordinator = _coordinator_for(hass, call.data.get(ATTR_CONFIG_ENTRY_ID))
         await coordinator.async_brew(Recipe(uid="ha", name=name, recipe=recipe))
 
@@ -82,10 +82,8 @@ def _coordinator_for(
 async def async_setup_entry(hass: HomeAssistant, entry: TerraKaffeConfigEntry) -> bool:
     """Set up Terra Kaffe from a config entry."""
     api = TerraKaffeAPI(async_get_clientsession(hass))
-    username = entry.data.get(CONF_USERNAME)
-    password = entry.data.get(CONF_PASSWORD)
-    if username and password:
-        api.set_credentials(username, password)
+    # Only the offline refresh token is kept. If Terra Kaffe revokes it (for
+    # example after a password change) Home Assistant asks for the password.
     api.set_refresh_token(entry.data.get(CONF_REFRESH_TOKEN))
 
     @callback
@@ -110,11 +108,20 @@ async def async_unload_entry(hass: HomeAssistant, entry: TerraKaffeConfigEntry) 
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 
-async def async_migrate_entry(hass: HomeAssistant, entry: TerraKaffeConfigEntry) -> bool:
+async def async_migrate_entry(
+    hass: HomeAssistant, entry: TerraKaffeConfigEntry
+) -> bool:
     """Entries from the retired Afero platform cannot be converted.
 
     Afero device ids and tokens mean nothing to the new cloud, so the entry
     has to be removed and added again.
-    """
-    return entry.version >= 2
 
+    2.1 -> 2.2: stop storing the account password; the offline refresh
+    token is enough, and reauth covers a revoked token.
+    """
+    if entry.version < 2:
+        return False
+    if entry.version == 2 and entry.minor_version < 2:
+        data = {k: v for k, v in entry.data.items() if k != CONF_PASSWORD}
+        hass.config_entries.async_update_entry(entry, data=data, minor_version=2)
+    return True

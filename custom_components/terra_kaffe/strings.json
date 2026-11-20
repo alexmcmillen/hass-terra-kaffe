@@ -53,7 +53,7 @@
           "ready": "Ready",
           "brewing": "Brewing",
           "prewarming": "Prewarming",
-          "paused": "Paused",
+          "done": "Done",
           "cleaning": "Cleaning",
           "error": "Error"
         }

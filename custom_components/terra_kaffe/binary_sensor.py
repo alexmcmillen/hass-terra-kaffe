@@ -48,13 +48,17 @@ BINARY_SENSORS: tuple[TerraKaffeBinarySensorDescription, ...] = (
         key="brewing",
         translation_key="brewing",
         device_class=BinarySensorDeviceClass.RUNNING,
-        is_on_fn=lambda d: None if d.brew_status is None else d.brew_status == BREW_BREWING,
+        is_on_fn=lambda d: (
+            None if d.brew_status is None else d.brew_status == BREW_BREWING
+        ),
     ),
     TerraKaffeBinarySensorDescription(
         key="brew_error",
         translation_key="brew_error",
         device_class=BinarySensorDeviceClass.PROBLEM,
-        is_on_fn=lambda d: None if d.brew_status is None else d.brew_status == BREW_ERROR,
+        is_on_fn=lambda d: (
+            None if d.brew_status is None else d.brew_status == BREW_ERROR
+        ),
     ),
     TerraKaffeBinarySensorDescription(
         key="locked",
