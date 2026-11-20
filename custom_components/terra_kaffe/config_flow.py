@@ -111,7 +111,8 @@ class TerraKaffeConfigFlow(ConfigFlow, domain=DOMAIN):
     async def _create_entry(self, device_id: str) -> ConfigFlowResult:
         await self.async_set_unique_id(device_id)
         self._abort_if_unique_id_configured()
-        assert self._api is not None
+        if self._api is None:  # pragma: no cover
+            return self.async_abort(reason="unknown")
         return self.async_create_entry(
             title=self._devices.get(device_id, "Terra Kaffe"),
             data={
@@ -142,7 +143,8 @@ class TerraKaffeConfigFlow(ConfigFlow, domain=DOMAIN):
             elif entry.data[CONF_DEVICE_ID] not in self._devices:
                 errors["base"] = "wrong_account"
             else:
-                assert self._api is not None
+                if self._api is None:  # pragma: no cover
+                    return self.async_abort(reason="unknown")
                 return self.async_update_reload_and_abort(
                     entry,
                     data_updates={

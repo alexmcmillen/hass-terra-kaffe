@@ -1,13 +1,13 @@
 [tool.ruff]
 target-version = "py313"
-line-length = 100
+line-length = 88
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC", "RUF"]
+select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC", "BLE", "RUF"]
 ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101", "S105", "S106", "B011", "E731"]
+"tests/*" = ["S101", "S105", "S106", "B011", "E731", "S107"]
 
 [tool.coverage.report]
 fail_under = 95

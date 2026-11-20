@@ -19,7 +19,7 @@ AUTH_SCOPE = "openid profile offline_access"
 # Device API ("mercury"): device list, twin, commands.
 MOBILE_API_URL = "https://mercury.terrakaffeservice.com/api"
 
-CONF_REFRESH_TOKEN = "refresh_token"
+CONF_REFRESH_TOKEN = "refresh_token"  # noqa: S105 (config key, not a secret)
 CONF_DEVICE_ID = "device_id"
 
 UPDATE_INTERVAL = 30  # seconds

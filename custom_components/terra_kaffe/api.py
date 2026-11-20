@@ -185,7 +185,8 @@ class TerraKaffeAPI:
             expired = time.monotonic() >= self._expires_at
             if force or not self._access_token or expired:
                 await self._renew()
-            assert self._access_token is not None
+            if self._access_token is None:  # pragma: no cover
+                raise TerraKaffeAuthError("No access token")
             return self._access_token
 
     # -------------------------------------------------------------- requests

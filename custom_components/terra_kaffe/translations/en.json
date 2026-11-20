@@ -33,7 +33,8 @@
     },
     "abort": {
       "already_configured": "This machine is already set up.",
-      "reauth_successful": "Signed in again."
+      "reauth_successful": "Signed in again.",
+      "unknown": "Unexpected error. Check the logs."
     }
   },
   "entity": {
