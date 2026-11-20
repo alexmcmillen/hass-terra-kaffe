@@ -134,7 +134,7 @@ def test_clean_drink_name(raw, expected):
     assert clean_drink_name(raw) == expected
 
 
-@pytest.mark.parametrize("device_id", ["834B2CBCBBCDCC5E", "dev123456", "a-b_c"])
+@pytest.mark.parametrize("device_id", ["0123456789ABCDEF", "dev123456", "a-b_c"])
 def test_valid_device_ids(device_id):
     assert validate_device_id(device_id) == device_id
 
