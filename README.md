@@ -10,10 +10,10 @@ forks). This fork replaces the API layer and keeps the good parts of
 `nickrunco/hass-terra-kaffe`: saved-drink buttons, cancel, and the
 remote-brewing safety arm.
 
-> **Status: built from static analysis of app version 2.0.6 and the device
-> API's published schema. It passes its test suite against a simulated cloud
-> but has not yet been run against a real account.** See
-> [What is verified](#what-is-verified) before trusting it with your coffee.
+> **Status: verified against a real TK-02 (firmware 39) on 2026-11-20.**
+> Sign-in, reading state, wake, sleep, settings writes and a full brew all
+> worked end to end. Cancel brew follows the same route as brewing but has
+> not been exercised on hardware yet. See [What is verified](#what-is-verified).
 
 ## What you get
 
@@ -63,27 +63,33 @@ ids and tokens mean nothing to the new cloud, so entries cannot be converted.
 - **Sign-in:** Keycloak at `auth.terrakaffeservice.com`, realm `tkf`, public
   client `tk_android`, password grant with `offline_access`. The refresh
   token is stored in the config entry and rotated as Keycloak rotates it.
-  Your email and password are also stored there (`.storage/core.config_entries`)
-  so the integration can sign in again when the refresh token dies.
+  Your password is **not** stored: it is used once to get the token. If the
+  token is ever revoked, Home Assistant asks you to sign in again. See
+  [SECURITY.md](SECURITY.md).
 - **State:** `GET /api/devices/{id}/twin` on `mercury.terrakaffeservice.com`,
   polled every 30 seconds. The twin is an Azure IoT Hub device twin.
 - **Brew and cancel:** `POST /api/devices/{id}/command` with
   `{"drink_order": "id^epoch^name^$53|e1|f115"}` or `{"cancel_brew": true}`.
 - **Wake and sleep:** `PUT /api/devices/{id}/twin` with a desired-properties
-  patch setting power status to 2 (wake) or 3 (sleep).
+  patch setting power status to 2 (wake) or 3 (sleep). The machine reports 2
+  while it warms up and 1 once it is ready; brewing waits for 1.
+- **Brew status:** 0 ready, 1 brewing, 3 done. The official app labels 3
+  "paused", but the machine reports it after every finished drink, so it
+  counts as idle and a new drink can start.
 
 Full notes are in [docs/API.md](docs/API.md).
 
 ## What is verified
 
-| Piece | Confidence | Source |
+| Piece | Status | Source |
 |---|---|---|
-| Sign-in form and token refresh | High | App source (`KeycloakSignInClient`, `RustAuthTokenProvider`) and the live OIDC discovery document |
-| Routes, verbs and request bodies | High | The device API's own OpenAPI schema |
-| Bearer token accepted by the device API | Medium | The app sends it; the schema only lists basic and cookie auth |
-| Twin key names | Medium | Schema example plus key names in the app's native library. Both the nested (`device.status`) and flat (`dev_sts`) shapes are handled |
-| Wake and sleep write | Medium | Values 2 and 3 are documented in the library; whether the cloud wants the nested or flat key is inferred from the shape the machine reports |
-| Saved-drink slot format | Medium | Library docstrings. The schema's example shows a different, older-looking format, which would simply leave the brew buttons unavailable |
+| Sign-in form and token refresh | Verified live | App source and a real account |
+| Device list and twin read | Verified live | Real TK-02, firmware 39 |
+| Twin key shape | Verified live | Flat keys (`dev_sts`, `brew_sts`, `drink_01`...) on firmware 39; the nested shape is still handled |
+| Settings write (`PUT /twin`) | Verified live | Schedule re-sent unchanged |
+| Wake and sleep | Verified live | Reported status follows within about a second |
+| Brew (`POST /command` with `drink_order`) | Verified live | Saved Americano brewed start to finish |
+| Cancel brew (`cancel_brew`) | Not yet on hardware | Same route and schema as brew |
 
 If something is off, **download diagnostics** from the integration page. The
 dump contains the twin exactly as the cloud returned it (serial, Wi-Fi, PIN
@@ -92,9 +98,16 @@ and account details redacted) and is all that is needed to fix a mapping.
 ## Development
 
 ```bash
-python -m venv .venv && .venv/bin/pip install pytest-homeassistant-custom-component
-.venv/bin/pytest
+uv venv --python 3.14 && uv pip install -r requirements_test.txt
+uv run --no-project pytest --cov=custom_components/terra_kaffe
+uvx ruff check custom_components tests
 ```
+
+The suite (118 tests, about 98% line coverage) runs the API client against
+a fake Keycloak and device API, runs the integration inside a real Home
+Assistant test harness, and replays the state a real TK-02 reported, so a
+change that would break brewing on hardware fails in CI first. CI also runs
+hassfest, HACS validation and a secret scan.
 
 ## Credits and license
 

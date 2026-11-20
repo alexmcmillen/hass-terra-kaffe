@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Upstream history: a public Afero hostname, not a secret"
+commits = ["9b61b3959857e2f3b1749e89017ebe525a1e1594"]

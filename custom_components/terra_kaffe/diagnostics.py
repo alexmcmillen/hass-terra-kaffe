@@ -35,6 +35,14 @@ TO_REDACT = {
     "wifi.ip_address",
     "device.serial",
     "device.friendly_name",
+    "name",
+    "tags",
+    "analytics",
+    "history",
+    "etag",
+    "wifi_en",
+    "access_token",
+    "url",
 }
 
 

@@ -77,9 +77,7 @@ class TerraKaffeCancelBrewButton(TerraKaffeEntity, ButtonEntity):
 class TerraKaffeSavedDrinkButton(TerraKaffeEntity, ButtonEntity):
     """Starts one of the drinks saved on the machine (slots 1-10)."""
 
-    def __init__(
-        self, coordinator: TerraKaffeDataUpdateCoordinator, slot: int
-    ) -> None:
+    def __init__(self, coordinator: TerraKaffeDataUpdateCoordinator, slot: int) -> None:
         """Initialize the button for a saved-drink slot."""
         super().__init__(coordinator, f"saved_drink_{slot}")
         self._slot = slot

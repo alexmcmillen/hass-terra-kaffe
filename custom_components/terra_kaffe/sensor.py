@@ -19,14 +19,20 @@ from homeassistant.helpers.typing import StateType
 
 from .coordinator import TerraKaffeConfigEntry, TerraKaffeDataUpdateCoordinator
 from .entity import TerraKaffeEntity
-from .twin import counter_remaining_percent, parse_counter, parse_recipe_slot, to_int
+from .twin import (
+    counter_remaining_percent,
+    parse_counter,
+    parse_grind,
+    parse_recipe_slot,
+    to_int,
+)
 
 POWER_STATES = {0: "sleep", 1: "awake", 2: "waking_up", 3: "going_to_sleep"}
 BREW_STATES = {
     0: "ready",
     1: "brewing",
     2: "prewarming",
-    3: "paused",
+    3: "done",
     4: "cleaning",
     5: "error",
 }
@@ -79,7 +85,9 @@ def _maintenance(key: str, path: str) -> TerraKaffeSensorDescription:
     )
 
 
-def _diagnostic(key: str, path: str, *, enabled: bool = False) -> TerraKaffeSensorDescription:
+def _diagnostic(
+    key: str, path: str, *, enabled: bool = False
+) -> TerraKaffeSensorDescription:
     return TerraKaffeSensorDescription(
         key=key,
         translation_key=key,
@@ -89,6 +97,8 @@ def _diagnostic(key: str, path: str, *, enabled: bool = False) -> TerraKaffeSens
         entity_registry_enabled_default=enabled,
     )
 
+
+ALWAYS_CREATE = frozenset({"device_status", "brewing_status"})
 
 SENSORS: tuple[TerraKaffeSensorDescription, ...] = (
     TerraKaffeSensorDescription(
@@ -173,6 +183,7 @@ SENSORS: tuple[TerraKaffeSensorDescription, ...] = (
         key="grind_setting",
         translation_key="grind_setting",
         path="levels.grind",
+        value_fn=parse_grind,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     TerraKaffeSensorDescription(
@@ -210,8 +221,13 @@ async def async_setup_entry(
 ) -> None:
     """Set up Terra Kaffe sensors."""
     coordinator = entry.runtime_data
+    twin = coordinator.data.twin if coordinator.data else {}
+    # Firmware versions differ in what they report. Skip sensors whose value
+    # the machine does not report at all instead of leaving them unavailable.
     async_add_entities(
-        TerraKaffeSensor(coordinator, description) for description in SENSORS
+        TerraKaffeSensor(coordinator, description)
+        for description in SENSORS
+        if description.path in twin or description.key in ALWAYS_CREATE
     )
 
 
